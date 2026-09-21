@@ -3,6 +3,11 @@ from pathlib import Path
 PATH_PARENT = Path(__file__).parent
 sys.path.append(str(PATH_PARENT))
 from utils import MujocoRenderUtils
+from lidar_heightmap import LidarHeightMap
+from perceptive_observation import PerceptiveObservationBuilder
+from terrain_navigator import TerrainNavigator
+from goal_navigator import GoalNavigator
+from ros2_vslam_bridge import Ros2VslamBridge
 
 import os
 import time
@@ -12,11 +17,58 @@ import numpy as np
 from legged_gym import LEGGED_GYM_ROOT_DIR
 import torch
 import yaml
-import os
-import imageio
 from argparse import ArgumentParser
 import pygame
-from matplotlib import pyplot as plt
+import glfw
+
+
+class KeyboardCommand:
+    def __init__(self, config=None, goal_names=None):
+        config = config or {}
+        self.goal_names = list(goal_names or [])[:9]
+        self.command = np.zeros(3, dtype=np.float32)
+        self.reset_requested = False
+        self.goal_request = None
+        self.goal_cancel_requested = False
+        self.forward_speed = float(config.get("forward", 0.8))
+        self.backward_speed = float(config.get("backward", -0.6))
+        self.turn_speed = float(config.get("turn", 1.0))
+
+    def handle_key(self, keycode):
+        if glfw.KEY_1 <= keycode <= glfw.KEY_9:
+            index = keycode - glfw.KEY_1
+            if index >= len(self.goal_names):
+                return
+            self.command[:] = 0.0
+            self.goal_cancel_requested = False
+            self.goal_request = self.goal_names[index]
+            print(f"Navigation requested: {self.goal_request}")
+            return
+        if keycode in (glfw.KEY_0, glfw.KEY_KP_0):
+            self.command[:] = 0.0
+            self.goal_cancel_requested = True
+            print("Navigation cancelled")
+            return
+        if keycode in (glfw.KEY_UP, glfw.KEY_KP_8):
+            self.command[:] = (self.forward_speed, 0.0, 0.0)
+        elif keycode in (glfw.KEY_DOWN, glfw.KEY_KP_2):
+            self.command[:] = (self.backward_speed, 0.0, 0.0)
+        elif keycode in (glfw.KEY_LEFT, glfw.KEY_KP_4):
+            self.command[:] = (0.0, 0.0, self.turn_speed)
+        elif keycode in (glfw.KEY_RIGHT, glfw.KEY_KP_6):
+            self.command[:] = (0.0, 0.0, -self.turn_speed)
+        elif keycode in (glfw.KEY_SPACE, glfw.KEY_KP_5):
+            self.command[:] = 0.0
+        elif keycode == glfw.KEY_R:
+            self.command[:] = 0.0
+            self.reset_requested = True
+        else:
+            return
+        self.goal_cancel_requested = True
+        print(
+            f"Command: Vx={self.command[0]:+.2f}, "
+            f"Vy={self.command[1]:+.2f}, Wz={self.command[2]:+.2f}"
+        )
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -42,6 +94,13 @@ def quat_rotate_inverse(q, v):
     c = q_vec * np.dot(q_vec, v) * 2.0
     return a - b + c
 
+def get_yaw(q):
+    qw, qx, qy, qz = q
+    return np.arctan2(
+        2.0 * (qw * qz + qx * qy),
+        1.0 - 2.0 * (qy * qy + qz * qz),
+    )
+
 def pd_control(target_q, q, kp, target_dq, dq, kd):
     """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
@@ -60,16 +119,97 @@ def get_xbox_command(joystick, max_cmd):
     cmd_yaw = -rx * max_cmd[2]
     return np.array([cmd_x, cmd_y, cmd_yaw], dtype=np.float32)
 
+
+def get_environment_contact(model, data):
+    """Return the strongest non-floor robot/environment contact for debugging."""
+    strongest = None
+    ignored_environment_geoms = {"floor", "living_rug"}
+    for contact_index in range(data.ncon):
+        contact = data.contact[contact_index]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+        body1 = int(model.geom_bodyid[geom1])
+        body2 = int(model.geom_bodyid[geom2])
+
+        # The furnished scene geoms are attached to world body 0; the robot
+        # geoms are attached to articulated bodies. Ignore self contacts.
+        if (body1 == 0) == (body2 == 0):
+            continue
+        environment_geom = geom1 if body1 == 0 else geom2
+        robot_geom = geom2 if body1 == 0 else geom1
+        environment_name = (
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, environment_geom)
+            or f"geom{environment_geom}"
+        )
+        if environment_name in ignored_environment_geoms:
+            continue
+        robot_name = (
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, robot_geom)
+            or f"geom{robot_geom}"
+        )
+        contact_force = np.zeros(6, dtype=np.float64)
+        mujoco.mj_contactForce(model, data, contact_index, contact_force)
+        force = float(np.linalg.norm(contact_force[:3]))
+        if strongest is None or force > strongest[0]:
+            strongest = (force, robot_name, environment_name)
+
+    if strongest is None:
+        return "Contact: none"
+    force, robot_name, environment_name = strongest
+    return f"Contact: {robot_name} <-> {environment_name} ({force:.0f} N)"
+
+
+def normalize_view_options(viewer):
+    """Keep visual meshes and the environment visible after keyboard input."""
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TEXTURE] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_STATIC] = 1
+    for flag in (
+        mujoco.mjtVisFlag.mjVIS_ACTUATOR,
+        mujoco.mjtVisFlag.mjVIS_ACTIVATION,
+        mujoco.mjtVisFlag.mjVIS_JOINT,
+        mujoco.mjtVisFlag.mjVIS_CONSTRAINT,
+        mujoco.mjtVisFlag.mjVIS_CONTACTPOINT,
+        mujoco.mjtVisFlag.mjVIS_CONTACTFORCE,
+        mujoco.mjtVisFlag.mjVIS_CONTACTSPLIT,
+        mujoco.mjtVisFlag.mjVIS_TRANSPARENT,
+        mujoco.mjtVisFlag.mjVIS_SELECT,
+    ):
+        viewer.opt.flags[flag] = 0
+
+    # group 0 contains simplified robot collision primitives, group 1 is the
+    # furnished environment, and group 2 contains the robot's visual meshes.
+    viewer.opt.geomgroup[:] = 0
+    viewer.opt.geomgroup[1] = 1
+    viewer.opt.geomgroup[2] = 1
+
 if __name__ == "__main__":
     parser = ArgumentParser()
+    parser.add_argument("--config", default="go2.yaml", help="Config file in deploy/deploy_mujoco/configs.")
+    parser.add_argument(
+        "--goal",
+        nargs=2,
+        type=float,
+        metavar=("X", "Y"),
+        help="Start autonomous navigation to a world-coordinate goal.",
+    )
     parser.add_argument("--save-video", action="store_true", help="Whether to save video of the simulation.")
     parser.add_argument("--visualize-moe-weights", action="store_true", help="Whether to visualize mixture of experts weights.")
     parser.add_argument("--save-moe-latent", action="store_true", help="Whether to save mixture of experts latent vectors.")
+    parser.add_argument(
+        "--ros2-vslam",
+        action="store_true",
+        help="Publish the simulated front RGB-D camera for RTAB-Map.",
+    )
     args = parser.parse_args()
     save_video = args.save_video
     visualize_moe_weights = args.visualize_moe_weights
     save_moe_latent = args.save_moe_latent
-    config_file = "go2.yaml"
+    config_file = args.config
+
+    if save_video:
+        import imageio
+    if visualize_moe_weights:
+        from matplotlib import pyplot as plt
 
     pygame.init()
     use_joystick = False
@@ -84,12 +224,17 @@ if __name__ == "__main__":
 
     with open(f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
+        if args.ros2_vslam:
+            config.setdefault("ros2_vslam", {})["enabled"] = True
         policy_path = config["policy_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
         xml_path = config["xml_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
 
         simulation_duration = config["simulation_duration"]
         simulation_dt = config["simulation_dt"]
         control_decimation = config["control_decimation"]
+        render_decimation = max(
+            1, int(config.get("render_decimation", control_decimation))
+        )
 
         kps = np.array(config["kps"], dtype=np.float32)
         kds = np.array(config["kds"], dtype=np.float32)
@@ -107,6 +252,13 @@ if __name__ == "__main__":
         num_obs = config["num_obs"]
 
         cmd = np.array(config["cmd_init"], dtype=np.float32)
+        lidar_config = config.get("lidar", {})
+        perceptive_policy = bool(config.get("perceptive_policy", False))
+        navigation_config = config.get("navigation", {})
+        goal_navigation_config = config.get("goal_navigation", {})
+        camera_config = config.get("camera", {})
+        ros2_vslam_config = config.get("ros2_vslam", {})
+        keyboard_config = config.get("keyboard", {})
 
         idx_model2mj = idx_mj2model = list(range(num_actions))
         if 'mujoco_joint_names' in config and 'model_joint_names' in config:
@@ -114,6 +266,11 @@ if __name__ == "__main__":
             model_joint_names = config["model_joint_names"]
             idx_model2mj = [model_joint_names.index(joint) for joint in mujoco_joint_names]
             idx_mj2model = [mujoco_joint_names.index(joint) for joint in model_joint_names]
+
+    keyboard = KeyboardCommand(
+        keyboard_config,
+        goal_navigation_config.get("presets", {}).keys(),
+    )
 
     video_save_dir = str(PATH_PARENT / "videos")
     os.makedirs(video_save_dir, exist_ok=True)
@@ -128,16 +285,43 @@ if __name__ == "__main__":
     obs = np.zeros(num_obs, dtype=np.float32)
 
     counter = 0
+    stationary_updates = 0
+    hold_active = False
+    hold_target = default_angles.copy()
+    hold_settle_updates = max(1, int(0.5 / (simulation_dt * control_decimation)))
+    hold_kps = np.full_like(kps, 40.0)
+    hold_kds = np.full_like(kds, 1.5)
 
     # Load robot model
     m = mujoco.MjModel.from_xml_path(xml_path)
     d = mujoco.MjData(m)
     m.opt.timestep = simulation_dt
+    mujoco.mj_forward(m, d)
+    lidar = None
+    lidar_scan_steps = 1
+    if lidar_config.get("enabled", False):
+        lidar = LidarHeightMap(m, d, lidar_config)
+        lidar_scan_steps = max(1, int(lidar.scan_interval / simulation_dt))
+    if perceptive_policy and lidar is None:
+        raise RuntimeError("perceptive_policy requires lidar.enabled: true")
+    privileged_builder = PerceptiveObservationBuilder(
+        m, simulation_dt * control_decimation
+    ) if perceptive_policy else None
+    navigator = TerrainNavigator(navigation_config)
+    goal_navigator = GoalNavigator(m, d, goal_navigation_config)
+    if lidar is not None:
+        lidar.scan()
+    if args.goal is not None:
+        goal_navigator.set_goal(args.goal, d.qpos[:2], d.time)
 
-    renderer = mujoco.Renderer(m, height=360, width=640)
+    renderer = mujoco.Renderer(m, height=360, width=640) if save_video else None
+    ros2_vslam = None
+    if ros2_vslam_config.get("enabled", False):
+        ros2_vslam = Ros2VslamBridge(m, d, ros2_vslam_config)
     
     # load policy
-    policy = torch.jit.load(policy_path)
+    policy = torch.jit.load(policy_path, map_location="cpu")
+    policy.eval()
 
     video_fps = 50
     if save_video:
@@ -165,36 +349,121 @@ if __name__ == "__main__":
         latent_path = os.path.join(latent_save_dir, latent_filename)
         all_latents = []
 
-    with mujoco.viewer.launch_passive(m, d) as viewer:
+    preset_help = " | ".join(
+        f"{index + 1}:{name}"
+        for index, name in enumerate(goal_navigator.preset_names[:9])
+    )
+    print("Arrow keys or keypad 8/2/4/6: move | Space/keypad 5: stop | R: reset")
+    if preset_help:
+        print(f"Goal navigation: {preset_help} | 0:cancel")
+    with mujoco.viewer.launch_passive(m, d, key_callback=keyboard.handle_key) as viewer:
 
         # set viewer.camera to follow robot
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = 1
-        viewer.cam.distance = 2.0
-        viewer.cam.elevation = -20.0
-        viewer.cam.azimuth = 60.0
+        viewer.cam.distance = float(camera_config.get("distance", 2.0))
+        viewer.cam.elevation = float(camera_config.get("elevation", -20.0))
+        viewer.cam.azimuth = float(camera_config.get("azimuth", 60.0))
+        with viewer.lock():
+            normalize_view_options(viewer)
 
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
+        wall_clock_start = time.perf_counter()
+        simulation_clock_start = float(d.time)
+        realtime_factor = 1.0
+        contact_status = "Contact: none"
         while viewer.is_running() and time.time() - start < simulation_duration:
+            if keyboard.reset_requested:
+                mujoco.mj_resetData(m, d)
+                mujoco.mj_forward(m, d)
+                action.fill(0.0)
+                last_action.fill(0.0)
+                target_dof_pos = default_angles.copy()
+                stationary_updates = 0
+                hold_active = False
+                if privileged_builder is not None:
+                    privileged_builder.reset(d.qvel[6:])
+                navigator.reset()
+                goal_navigator.cancel()
+                if lidar is not None:
+                    lidar.scan()
+                if ros2_vslam is not None:
+                    ros2_vslam.reset()
+                keyboard.reset_requested = False
+                wall_clock_start = time.perf_counter()
+                simulation_clock_start = float(d.time)
+                realtime_factor = 1.0
+
             vel = d.qvel[:3]
             ang_vel = d.qvel[3:6]
             local_vel = quat_rotate_inverse(d.qpos[3:7], vel)
             local_ang_vel = quat_rotate_inverse(d.qpos[3:7], ang_vel)
             show_str = f"Speed: Vx={local_vel[0]:.2f}, Vy={local_vel[1]:.2f}, Wz={local_ang_vel[2]:.2f}, "
-            step_start = time.time()
+            if counter % control_decimation == 0:
+                if keyboard.goal_cancel_requested:
+                    goal_navigator.cancel()
+                    keyboard.goal_cancel_requested = False
+                if keyboard.goal_request is not None:
+                    goal_navigator.set_named_goal(
+                        keyboard.goal_request, d.qpos[:2], d.time
+                    )
+                    keyboard.goal_request = None
 
-            if use_joystick and counter % control_decimation == 0:
-                cmd = get_xbox_command(joystick, config["max_cmd"])
+                goal_control = goal_navigator.active
+                if goal_control:
+                    manual_cmd = goal_navigator.update(
+                        d.qpos[:2], get_yaw(d.qpos[3:7]), d.time
+                    )
+                elif use_joystick:
+                    manual_cmd = get_xbox_command(joystick, config["max_cmd"])
+                else:
+                    manual_cmd = keyboard.command.copy()
+                cmd = navigator.update(
+                    manual_cmd,
+                    lidar,
+                    get_yaw(d.qpos[3:7]),
+                    autonomous=goal_control,
+                    lateral_velocity=float(local_vel[1]),
+                    goal_distance=(
+                        goal_navigator.last_distance if goal_control else None
+                    ),
+                )
+                if np.linalg.norm(cmd) < 1e-4:
+                    stationary_updates += 1
+                    if stationary_updates >= hold_settle_updates and not hold_active:
+                        hold_target = default_angles.copy()
+                        hold_active = True
+                else:
+                    stationary_updates = 0
+                    hold_active = False
                 show_str += f"Cmd: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, Wz={cmd[2]:.2f}"
-                print(show_str, end='\r')
+                if counter % (control_decimation * 50) == 0:
+                    print(
+                        f"{show_str}, RTF={realtime_factor:.2f}x | "
+                        f"{navigator.status_text()} | {contact_status}",
+                        end='\r',
+                    )
 
-            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            active_kps = hold_kps if hold_active else kps
+            active_kds = hold_kds if hold_active else kds
+            tau = pd_control(
+                target_dof_pos,
+                d.qpos[7:],
+                active_kps,
+                np.zeros_like(active_kds),
+                d.qvel[6:],
+                active_kds,
+            )
             d.ctrl[:] = tau
             # mj_step can be replaced with code that also evaluates
             # a policy and applies a control signal before stepping the physics.
             mujoco.mj_step(m, d)
             mujoco_render_utils.update(cmd, d)
+            if lidar is not None and counter % lidar_scan_steps == 0:
+                lidar.scan()
+            if ros2_vslam is not None:
+                ros2_vslam.update(d.time)
 
             if save_video and counter % frame_skip == 0:
                 try:
@@ -207,63 +476,116 @@ if __name__ == "__main__":
 
             counter += 1
             if counter % control_decimation == 0:
-                # Apply control signal here.
-
-                # create observation
-                qj = d.qpos[7:]
-                dqj = d.qvel[6:]
-                quat = d.qpos[3:7]
-                lin_vel = d.qvel[:3]
-                ang_vel = d.qvel[3:6]
-
-                qj = (qj - default_angles) * dof_pos_scale
-
-                dqj = dqj * dof_vel_scale
-                gravity_orientation = get_gravity_orientation(quat)
-                lin_vel = lin_vel * lin_vel_scale
-                ang_vel = ang_vel * ang_vel_scale
-
-                obs[:3] = ang_vel
-                obs[3:6] = gravity_orientation
-                obs[6:9] = cmd * cmd_scale
-                obs[9 : 9 + num_actions] = qj[idx_mj2model]
-                obs[9 + num_actions : 9 + 2 * num_actions] = dqj[idx_mj2model]
-                obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action[idx_mj2model]
-                obs_tensor = torch.from_numpy(obs).unsqueeze(0)
-                # policy inference
-                last_action = action
-                result = policy(obs_tensor)
-                if isinstance(result, tuple):
-                    action, (weights, latent) = result  # moe
-                    action = action.detach().numpy().squeeze()[idx_model2mj]
-                    weights = weights.detach().numpy().squeeze()
-                    latent = latent.detach().numpy().squeeze()
-                    if visualize_moe_weights:
-                        if bars is None:
-                            x = np.arange(len(weights))
-                            bars = ax.bar(x, weights)
-                            ax.set_ylim(0, 1)
-                        else:
-                            for bar, w in zip(bars, weights):
-                                bar.set_height(w)
-                        
-                        plt.draw()
-                        plt.pause(0.001) # 这会造成大约 1ms 的延迟
-                    if save_moe_latent:
-                        all_latents.append(latent)
+                if hold_active:
+                    target_dof_pos = hold_target
                 else:
-                    action = result.detach().cpu().numpy().squeeze()[idx_model2mj]
-                # transform action to target_dof_pos
-                target_dof_pos = action * action_scale + default_angles
+                    qj = (d.qpos[7:] - default_angles) * dof_pos_scale
+                    dqj = d.qvel[6:] * dof_vel_scale
+                    gravity_orientation = get_gravity_orientation(d.qpos[3:7])
+                    ang_vel = d.qvel[3:6] * ang_vel_scale
 
-            # Pick up changes to the physics state, apply perturbations, update options from GUI.
-            mujoco_render_utils.update_external_rendering(viewer, ctype='viewer')
-            viewer.sync()
+                    obs[:3] = ang_vel
+                    obs[3:6] = gravity_orientation
+                    obs[6:9] = cmd * cmd_scale
+                    obs[9 : 9 + num_actions] = qj[idx_mj2model]
+                    obs[9 + num_actions : 9 + 2 * num_actions] = dqj[idx_mj2model]
+                    obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action[idx_mj2model]
+                    obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+                    last_action = action
+                    with torch.inference_mode():
+                        if perceptive_policy:
+                            local_linear_velocity = quat_rotate_inverse(
+                                d.qpos[3:7], d.qvel[:3]
+                            )
+                            privileged = privileged_builder.build(
+                                d,
+                                obs,
+                                local_linear_velocity,
+                                tau,
+                                lidar,
+                                idx_mj2model,
+                            )
+                            result = policy(
+                                obs_tensor, torch.from_numpy(privileged).unsqueeze(0)
+                            )
+                        else:
+                            result = policy(obs_tensor)
+                    if perceptive_policy:
+                        action, latent = result
+                        action = action.detach().numpy().squeeze()[idx_model2mj]
+                        latent = latent.detach().numpy().squeeze()
+                        if save_moe_latent:
+                            all_latents.append(latent)
+                    elif isinstance(result, tuple):
+                        action, (weights, latent) = result  # moe
+                        action = action.detach().numpy().squeeze()[idx_model2mj]
+                        weights = weights.detach().numpy().squeeze()
+                        latent = latent.detach().numpy().squeeze()
+                        if visualize_moe_weights:
+                            if bars is None:
+                                x = np.arange(len(weights))
+                                bars = ax.bar(x, weights)
+                                ax.set_ylim(0, 1)
+                            else:
+                                for bar, w in zip(bars, weights):
+                                    bar.set_height(w)
 
-            # Rudimentary time keeping, will drift relative to wall clock.
-            # time_until_next_step = m.opt.timestep - (time.time() - step_start) - 0.1
-            # if time_until_next_step > 0:
-            #     time.sleep(time_until_next_step)
+                            plt.draw()
+                            plt.pause(0.001)
+                        if save_moe_latent:
+                            all_latents.append(latent)
+                    else:
+                        action = result.detach().cpu().numpy().squeeze()[idx_model2mj]
+                    target_dof_pos = action * action_scale + default_angles
+
+            # Rendering and Python-side point-cloud drawing at the 500 Hz
+            # physics rate makes the viewer look like slow motion.  Render at
+            # a human-visible rate and pace against accumulated simulation
+            # time, so compute overhead does not add once per physics step.
+            if counter % render_decimation == 0:
+                contact_status = get_environment_contact(m, d)
+                grid_image = lidar.consume_image() if lidar is not None else None
+                # The passive viewer renders on another thread.  Rebuilding
+                # user geometry and changing display groups without its lock
+                # lets that thread observe a half-cleared scene, which appears
+                # as intermittent flashing.
+                with viewer.lock():
+                    normalize_view_options(viewer)
+                    mujoco_render_utils.update_external_rendering(
+                        viewer, ctype='viewer'
+                    )
+                    if lidar is not None:
+                        lidar.append_point_cloud(viewer.user_scn)
+                    goal_navigator.append_path(viewer.user_scn)
+                if lidar is not None:
+                    # These handle methods synchronize internally and must not
+                    # be called while holding viewer.lock().
+                    if grid_image is not None:
+                        viewer.set_images(
+                            (mujoco.MjrRect(10, 10, 240, 180), grid_image)
+                        )
+                    viewer.set_texts(
+                        (
+                            mujoco.mjtFontScale.mjFONTSCALE_100,
+                            mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                            lidar.status_text(),
+                                (
+                                    f"{navigator.status_text()}\n"
+                                    f"{goal_navigator.status_text()}\n"
+                                    f"RTF: {realtime_factor:.2f}x\n{contact_status}"
+                            ),
+                        )
+                    )
+                viewer.sync()
+
+                simulated_elapsed = float(d.time) - simulation_clock_start
+                target_wall_time = wall_clock_start + simulated_elapsed
+                remaining = target_wall_time - time.perf_counter()
+                if remaining > 0.0:
+                    time.sleep(remaining)
+                wall_elapsed = time.perf_counter() - wall_clock_start
+                if wall_elapsed > 1.0e-6:
+                    realtime_factor = simulated_elapsed / wall_elapsed
 
     # writer.close()
     if save_video:
@@ -273,3 +595,5 @@ if __name__ == "__main__":
         all_latents = np.array(all_latents)
         np.save(latent_path, all_latents)
         print(f"Latent vectors saved successfully to {latent_path}")
+    if ros2_vslam is not None:
+        ros2_vslam.close()

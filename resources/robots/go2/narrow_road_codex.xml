@@ -1,0 +1,9 @@
+<mujoco model="go2 narrow road test">
+  <include file="go2.xml"/>
+  <worldbody>
+    <!-- 0.90 m wide straight elevated road, with no supporting floor outside. -->
+    <geom name="narrow_road" type="box" group="1"
+          pos="2.0 0 -0.05" size="3.50 0.45 0.05"
+          rgba="0.28 0.34 0.42 1" friction="1.0 0.01 0.001"/>
+  </worldbody>
+</mujoco>

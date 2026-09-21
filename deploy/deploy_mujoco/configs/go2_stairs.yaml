@@ -1,0 +1,70 @@
+policy_path: "{LEGGED_GYM_ROOT_DIR}/deploy/pre_train/go2/go2_moe_cts_teacher_perceptive.pt"
+perceptive_policy: true
+xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/go2/stairs_codex.xml"
+
+simulation_duration: 60000000.0
+simulation_dt: 0.002
+control_decimation: 10
+
+kps: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+kds: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+default_angles: [0.1, 0.8, -1.5, -0.1, 0.8, -1.5,
+                 0.1, 1.0, -1.5, -0.1, 1.0, -1.5]
+
+lin_vel_scale: 2.0
+ang_vel_scale: 0.25
+dof_pos_scale: 1.0
+dof_vel_scale: 0.05
+action_scale: 0.25
+cmd_scale: [2.0, 2.0, 0.25]
+num_actions: 12
+num_obs: 45
+max_cmd: [2.0, 1.0, 2.5]
+cmd_init: [0.0, 0.0, 0.0]
+
+lidar:
+  enabled: true
+  body_name: "base"
+  sensor_offset: [0.20, 0.0, 0.12]
+  x_min: 0.25
+  x_max: 2.05
+  y_min: -0.75
+  y_max: 0.75
+  resolution: 0.10
+  scan_interval: 0.02
+  terrain_group: 1
+  rise_threshold: 0.045
+
+navigation:
+  enabled: true
+  # A single terrain jump beyond these limits is not handed to the gait policy.
+  # The 8 cm stair risers remain traversable; walls and platform edges do not.
+  max_step_up: 0.18
+  max_drop: 0.15
+  lookahead_min: 0.25
+  lookahead_max: 1.00
+  planning_lookahead: 1.40
+  corridor_half_width: 0.22
+  planning_clearance: 0.12
+  hazard_fraction: 0.15
+  drop_fraction: 0.15
+  turn_speed: 0.90
+  heading_step_deg: 10.0
+  max_search_angle_deg: 90.0
+  heading_tolerance_deg: 6.0
+  clear_scans_required: 3
+
+mujoco_joint_names: [
+  "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+  "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+  "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+  "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"
+]
+
+model_joint_names: [
+  "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+  "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+  "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+  "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"
+]

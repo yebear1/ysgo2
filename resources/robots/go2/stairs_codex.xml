@@ -1,0 +1,34 @@
+<mujoco model="go2 six-step stairs">
+  <include file="go2.xml"/>
+
+  <statistic center="2.2 0 0.45" extent="2.8"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0.2 0.2 0.2"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-135" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.1"/>
+    <material name="stair_mat" rgba="0.55 0.58 0.62 1" roughness="0.8"/>
+  </asset>
+
+  <worldbody>
+    <light pos="2 0 4" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" group="1" material="groundplane" friction="1.0 0.01 0.001"/>
+
+    <!-- Six steps: 30 cm tread, 8 cm rise, 1.6 m wide. -->
+    <geom name="step_1" type="box" group="1" pos="1.35 0 0.04" size="0.15 0.80 0.04" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="step_2" type="box" group="1" pos="1.65 0 0.08" size="0.15 0.80 0.08" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="step_3" type="box" group="1" pos="1.95 0 0.12" size="0.15 0.80 0.12" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="step_4" type="box" group="1" pos="2.25 0 0.16" size="0.15 0.80 0.16" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="step_5" type="box" group="1" pos="2.55 0 0.20" size="0.15 0.80 0.20" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="step_6" type="box" group="1" pos="2.85 0 0.24" size="0.15 0.80 0.24" material="stair_mat" friction="1.0 0.01 0.001"/>
+    <geom name="top_platform" type="box" group="1" pos="3.75 0 0.24" size="0.75 0.80 0.24" material="stair_mat" friction="1.0 0.01 0.001"/>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,10 @@
+<mujoco model="go2 wall avoidance test">
+  <include file="go2.xml"/>
+  <worldbody>
+    <geom name="floor" type="plane" group="1" size="0 0 0.05"
+          rgba="0.20 0.28 0.34 1" friction="1.0 0.01 0.001"/>
+    <geom name="unclimbable_wall" type="box" group="1"
+          pos="1.25 0 0.30" size="0.08 0.55 0.30"
+          rgba="0.75 0.20 0.15 1" friction="1.0 0.01 0.001"/>
+  </worldbody>
+</mujoco>
