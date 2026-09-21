@@ -76,6 +76,9 @@ class TerrainNavigator:
         self.centering_forward_speed = float(
             config.get("centering_forward_speed", 0.75)
         )
+        self.centering_heading_gain = float(config.get("centering_heading_gain", 1.8))
+        self.centering_narrow_width = float(config.get("centering_narrow_width", 0.8))
+        self.centering_narrow_speed = float(config.get("centering_narrow_speed", 0.35))
 
         self.state = "FORWARD"
         self.hazard = "CLEAR"
@@ -130,6 +133,29 @@ class TerrainNavigator:
             error = self.centering_target - right
         else:
             return result
+
+        alignment = lidar.corridor_alignment(self.centering_activation)
+        if alignment is not None:
+            error, heading, width = alignment
+            # Align the body with the walls as well as translating towards
+            # their centre. Otherwise a forward command keeps driving across
+            # the passage and fights the lateral correction.
+            if self.state == "FORWARD":
+                result[2] = np.clip(
+                    self.centering_heading_gain * heading,
+                    -self.turn_speed,
+                    self.turn_speed,
+                )
+            clearance_ratio = np.clip(
+                (width - self.centering_narrow_width)
+                / max(2.0 * self.centering_activation - self.centering_narrow_width, 1.0e-3),
+                0.0,
+                1.0,
+            )
+            speed_limit = self.centering_narrow_speed + clearance_ratio * (
+                self.centering_forward_speed - self.centering_narrow_speed
+            )
+            result[0] = min(float(result[0]), speed_limit)
 
         position_correction = (
             0.0 if abs(error) <= self.centering_deadband

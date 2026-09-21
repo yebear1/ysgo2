@@ -20,6 +20,9 @@ class Grid:
     def planar_clearance(self, center_angle=0.0, half_angle=np.pi):
         return 2.0
 
+    def corridor_alignment(self, max_distance=0.75):
+        return None
+
     def translation_clearance(
         self, center_angle, half_width=0.23, body_half_length=0.39
     ):

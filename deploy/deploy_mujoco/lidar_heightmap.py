@@ -1,3 +1,5 @@
+from collections import deque
+
 import cv2
 import mujoco
 import numpy as np
@@ -60,6 +62,8 @@ class LidarHeightMap:
         self.policy_heights = np.zeros(
             (len(self.policy_x_values), len(self.policy_y_values)), dtype=np.float32
         )
+        self.policy_filter_obstacles = bool(config.get("policy_filter_obstacles", False))
+        self.policy_max_step = float(config.get("policy_max_step", 0.18))
 
     def scan(self):
         base_pos = self.data.xpos[self.base_id].copy()
@@ -192,6 +196,51 @@ class LidarHeightMap:
             return self.planar_max_range - body_half_length
         return float(np.min(longitudinal[selected] - body_half_length))
 
+    def corridor_alignment(self, max_distance=0.75):
+        """Return centre offset and heading of two nearby parallel walls.
+
+        Fit the actual side returns in the robot's yaw frame. A single range
+        on either side cannot distinguish lateral offset from a skewed body.
+        Reject corners, isolated objects and open space instead of inventing
+        a corridor where only one side is visible.
+        """
+        points = self.planar_ranges[:, None] * np.column_stack(
+            (np.cos(self.planar_angles), np.sin(self.planar_angles))
+        )
+        sides = []
+        for side in (1, -1):
+            difference = np.arctan2(
+                np.sin(self.planar_angles - side * np.pi / 2.0),
+                np.cos(self.planar_angles - side * np.pi / 2.0),
+            )
+            selected = (
+                (np.abs(difference) <= np.deg2rad(35.0))
+                & np.isfinite(self.planar_ranges)
+                & (self.planar_ranges < self.planar_max_range - 1.0e-3)
+            )
+            hits = points[selected]
+            if len(hits) < 5:
+                return None
+            centre = hits.mean(axis=0)
+            _, _, axes = np.linalg.svd(hits - centre, full_matrices=False)
+            tangent = axes[0]
+            if tangent[0] < 0.0:
+                tangent = -tangent
+            normal = np.array([-tangent[1], tangent[0]])
+            distance = float(centre @ normal)
+            if (
+                not 0.0 < side * distance < max_distance
+                or np.ptp(hits @ tangent) < 0.15
+                or np.max(np.abs((hits - centre) @ normal)) > 0.025
+                or abs(tangent[1]) > np.sin(np.deg2rad(25.0))
+            ):
+                return None
+            sides.append((distance, float(np.arctan2(tangent[1], tangent[0]))))
+        left, right = sides
+        if abs(left[1] - right[1]) > np.deg2rad(10.0):
+            return None
+        return 0.5 * (left[0] + right[0]), 0.5 * (left[1] + right[1]), left[0] - right[0]
+
     def _scan_policy_grid(self, base_pos, rotation):
         """Build the 187-point terrain observation used during RL training."""
         yaw = np.arctan2(rotation[1, 0], rotation[0, 0])
@@ -218,6 +267,53 @@ class LidarHeightMap:
                 self.policy_heights[i, j] = (
                     origin[2] - distance if distance >= 0.0 else self.baseline
                 )
+        if self.policy_filter_obstacles:
+            self._filter_policy_obstacles()
+
+    def _filter_policy_obstacles(self):
+        """Keep connected walking terrain, not wall tops, in the teacher input.
+
+        The privileged teacher learned ground elevations. Indoor walls within
+        its 17x11 grid otherwise appear as huge steps beside the feet and can
+        provoke sideways gait even when the velocity command is centred.
+        Only replace disconnected positive obstacles; the navigation scans
+        remain raw, and connected stairs/slopes and negative drops are kept.
+        """
+        heights = self.policy_heights
+        start = (
+            int(np.argmin(np.abs(self.policy_x_values))),
+            int(np.argmin(np.abs(self.policy_y_values))),
+        )
+        if abs(float(heights[start]) - self.baseline) > self.policy_max_step:
+            return
+        reachable = np.zeros(heights.shape, dtype=bool)
+        reachable[start] = True
+        pending = deque([start])
+        while pending:
+            i, j = pending.popleft()
+            for ni, nj in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
+                if (
+                    0 <= ni < heights.shape[0]
+                    and 0 <= nj < heights.shape[1]
+                    and not reachable[ni, nj]
+                    and abs(float(heights[ni, nj] - heights[i, j]))
+                    <= self.policy_max_step + 1.0e-6
+                ):
+                    reachable[ni, nj] = True
+                    pending.append((ni, nj))
+        obstacles = np.argwhere(
+            ~reachable & (heights > self.baseline + self.policy_max_step)
+        )
+        if not len(obstacles):
+            return
+        ground = np.argwhere(reachable)
+        ground_xy = np.column_stack(
+            (self.policy_x_values[ground[:, 0]], self.policy_y_values[ground[:, 1]])
+        )
+        for i, j in obstacles:
+            point = np.array([self.policy_x_values[i], self.policy_y_values[j]])
+            nearest = ground[np.argmin(np.sum((ground_xy - point) ** 2, axis=1))]
+            heights[i, j] = heights[tuple(nearest)]
 
     def policy_height_observation(self, base_height):
         """Return height features with the same order/scaling as Go2 training."""

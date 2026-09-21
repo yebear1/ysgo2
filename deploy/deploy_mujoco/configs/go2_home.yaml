@@ -60,6 +60,10 @@ lidar:
   scan_interval: 0.04
   terrain_group: 1
   rise_threshold: 0.045
+  # Wall/furniture tops are obstacles, not walking terrain for the teacher.
+  # Keep them in the raw navigation map; retain connected steps and slopes.
+  policy_filter_obstacles: true
+  policy_max_step: 0.18
 
 navigation:
   enabled: true
@@ -106,6 +110,9 @@ navigation:
   centering_deadband: 0.025
   centering_side_half_angle_deg: 12.0
   centering_forward_speed: 0.75
+  centering_heading_gain: 1.8
+  centering_narrow_width: 0.80
+  centering_narrow_speed: 0.35
 
 goal_navigation:
   enabled: true
