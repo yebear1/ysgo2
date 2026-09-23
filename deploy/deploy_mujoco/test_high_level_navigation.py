@@ -58,6 +58,27 @@ def main():
     assert 0.0 <= command[0] <= 0.75
     assert abs(command[1]) <= 0.30
     assert abs(command[2]) <= 0.90
+    # A side/rear goal requests a genuine pivot so the safety layer can
+    # release the turning envelope instead of selecting a competing arc.
+    for sign in (-1, 1):
+        policy.reset()
+        for degrees in (100, 40):
+            angle = np.deg2rad(sign * degrees)
+            turning = policy.command(
+                [2 * np.cos(angle), 2 * np.sin(angle)], [0, 0], 0,
+                [0, 0, 0], FakeLidar(),
+            )
+            np.testing.assert_array_equal(turning[:2], [0, 0])
+            assert sign * turning[2] > 0
+        angle = np.deg2rad(sign * 10)
+        policy.command(
+            [2 * np.cos(angle), 2 * np.sin(angle)], [0, 0], 0,
+            [0, 0, 0], FakeLidar(),
+        )
+        assert not policy.reorienting
+    policy.reset()
+    assert not policy.reorienting
+    np.testing.assert_array_equal(policy.previous_command, [0, 0, 0])
     print(f"high-level navigation checks passed: command={command}")
 
 

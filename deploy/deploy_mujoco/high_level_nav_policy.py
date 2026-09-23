@@ -90,6 +90,7 @@ class HighLevelNavigationPolicy:
             config.get("turn_speed_reduction", 0.65)
         )
         self.previous_command = np.zeros(3, dtype=np.float32)
+        self.reorienting = False
         self.policy = None
         if self.enabled:
             if not self.policy_path.is_file():
@@ -102,10 +103,31 @@ class HighLevelNavigationPolicy:
 
     def reset(self):
         self.previous_command.fill(0.0)
+        self.reorienting = False
 
     def command(self, target, position, yaw, local_velocity, lidar):
         if not self.enabled or self.policy is None:
             return None
+        delta = np.asarray(target)[:2] - np.asarray(position)[:2]
+        heading_error = float(np.arctan2(
+            np.sin(np.arctan2(delta[1], delta[0]) - yaw),
+            np.cos(np.arctan2(delta[1], delta[0]) - yaw),
+        ))
+        # A small positive PPO forward speed must not disguise a requested
+        # pivot as a forward arc. The terrain navigator can make room for a
+        # pure turn using its measured body envelope. Hysteresis prevents
+        # repeatedly switching between pivot and translation near the limit.
+        if abs(heading_error) > np.deg2rad(60.0):
+            self.reorienting = True
+        elif abs(heading_error) < np.deg2rad(15.0):
+            self.reorienting = False
+        if self.reorienting:
+            command = np.array([
+                0.0, 0.0,
+                np.clip(1.8 * heading_error, -self.max_yaw_rate, self.max_yaw_rate),
+            ], dtype=np.float32)
+            self.previous_command[:] = command
+            return command
         observation = build_navigation_observation(
             target,
             position,

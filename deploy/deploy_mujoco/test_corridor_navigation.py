@@ -90,6 +90,31 @@ class CorridorNavigationTests(unittest.TestCase):
         lidar.planar_ranges[:] = lidar.planar_max_range
         self.assertIsNone(lidar.corridor_alignment())
 
+    def test_learned_lateral_and_yaw_commands_still_center_in_corridor(self):
+        # PPO's nonzero Vy and yaw used to bypass all centring, driving a
+        # physically passable corridor into the furniture on one side.
+        for side in (-1, 1):
+            lidar = corridor(offset=side * .04, yaw=side * .08)
+            navigator = TerrainNavigator({})
+            command = navigator.update(
+                [.75, side * .2, side * .8], lidar, side * .08,
+                autonomous=True, lateral_velocity=side * .05,
+            )
+            self.assertLess(side * command[1], 0)
+            self.assertLess(side * command[2], 0)
+            self.assertLessEqual(command[0], .35 + 1e-6)
+        # At the centre, a learned lateral command must not survive merely
+        # because the correction happens to be exactly zero.
+        command = TerrainNavigator({}).update(
+            [.75, .2, .8], corridor(), 0, autonomous=True,
+        )
+        np.testing.assert_allclose(command, [.35, 0, 0], atol=1e-6)
+
+    def test_manual_lateral_command_is_preserved(self):
+        request = [.5, .2, .1]
+        command = TerrainNavigator({}).update(request, corridor(), 0)
+        np.testing.assert_allclose(command, request)
+
     def test_selected_avoidance_heading_and_stop_are_preserved(self):
         lidar = corridor()
         navigator = TerrainNavigator({})

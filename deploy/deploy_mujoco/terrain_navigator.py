@@ -148,9 +148,14 @@ class TerrainNavigator:
         if (
             not self.centering_enabled
             or result[0] <= 1.0e-3
-            or abs(result[1]) > 1.0e-3
-            or abs(result[2]) > 0.35
         ):
+            return result
+
+        # Autonomous PPO commands normally include Vy and yaw. In a fitted
+        # two-wall corridor they still need centring and heading alignment;
+        # explicit manual side steps already bypass this helper in update().
+        alignment = lidar.corridor_alignment(self.centering_activation)
+        if alignment is None and abs(result[2]) > 0.35:
             return result
 
         left = lidar.planar_clearance(
@@ -173,7 +178,6 @@ class TerrainNavigator:
         else:
             return result
 
-        alignment = lidar.corridor_alignment(self.centering_activation)
         if alignment is not None:
             error, heading, width = alignment
             # Align the body with the walls as well as translating towards
@@ -206,7 +210,11 @@ class TerrainNavigator:
             if abs(measured_lateral) <= self.centering_velocity_deadband
             else -self.centering_velocity_gain * measured_lateral
         )
-        if position_correction == 0.0 and velocity_correction == 0.0:
+        if (
+            alignment is None
+            and position_correction == 0.0
+            and velocity_correction == 0.0
+        ):
             return result
         lateral = float(
             np.clip(
