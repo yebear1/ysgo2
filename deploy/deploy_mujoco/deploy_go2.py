@@ -7,6 +7,7 @@ from lidar_heightmap import LidarHeightMap
 from perceptive_observation import PerceptiveObservationBuilder
 from terrain_navigator import TerrainNavigator
 from goal_navigator import GoalNavigator
+from high_level_nav_policy import HighLevelNavigationPolicy
 from ros2_vslam_bridge import Ros2VslamBridge
 
 import os
@@ -255,9 +256,20 @@ if __name__ == "__main__":
         lidar_config = config.get("lidar", {})
         perceptive_policy = bool(config.get("perceptive_policy", False))
         navigation_config = config.get("navigation", {})
-        goal_navigation_config = config.get("goal_navigation", {})
+        goal_navigation_config = dict(config.get("goal_navigation", {}))
+        high_level_navigation_config = dict(
+            config.get("high_level_navigation", {})
+        )
+        if "policy_path" in high_level_navigation_config:
+            high_level_navigation_config["policy_path"] = str(
+                high_level_navigation_config["policy_path"]
+            ).replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
         camera_config = config.get("camera", {})
         ros2_vslam_config = config.get("ros2_vslam", {})
+        if ros2_vslam_config.get("enabled", False):
+            # Global planning must consume RTAB-Map's optimized occupancy grid,
+            # never the simulator's scene geometry.
+            goal_navigation_config["map_source"] = "rtabmap"
         keyboard_config = config.get("keyboard", {})
 
         idx_model2mj = idx_mj2model = list(range(num_actions))
@@ -309,15 +321,22 @@ if __name__ == "__main__":
     ) if perceptive_policy else None
     navigator = TerrainNavigator(navigation_config)
     goal_navigator = GoalNavigator(m, d, goal_navigation_config)
+    high_level_navigator = HighLevelNavigationPolicy(
+        high_level_navigation_config
+    )
+    if high_level_navigator.enabled and lidar is None:
+        raise RuntimeError("high_level_navigation requires lidar.enabled: true")
     if lidar is not None:
         lidar.scan()
-    if args.goal is not None:
+    if args.goal is not None and not ros2_vslam_config.get("enabled", False):
         goal_navigator.set_goal(args.goal, d.qpos[:2], d.time)
 
     renderer = mujoco.Renderer(m, height=360, width=640) if save_video else None
     ros2_vslam = None
     if ros2_vslam_config.get("enabled", False):
         ros2_vslam = Ros2VslamBridge(m, d, ros2_vslam_config)
+    pending_goal_name = None
+    pending_goal_coordinates = args.goal if ros2_vslam is not None else None
     
     # load policy
     policy = torch.jit.load(policy_path, map_location="cpu")
@@ -386,6 +405,7 @@ if __name__ == "__main__":
                     privileged_builder.reset(d.qvel[6:])
                 navigator.reset()
                 goal_navigator.cancel()
+                high_level_navigator.reset()
                 if lidar is not None:
                     lidar.scan()
                 if ros2_vslam is not None:
@@ -399,30 +419,85 @@ if __name__ == "__main__":
             ang_vel = d.qvel[3:6]
             local_vel = quat_rotate_inverse(d.qpos[3:7], vel)
             local_ang_vel = quat_rotate_inverse(d.qpos[3:7], ang_vel)
+            global_pose = ros2_vslam.global_pose if ros2_vslam is not None else None
+            if ros2_vslam is not None:
+                map_update = ros2_vslam.take_navigation_map()
+                if map_update is not None:
+                    goal_navigator.update_occupancy_grid(map_update)
+                rviz_goal = ros2_vslam.take_navigation_goal()
+                if rviz_goal is not None:
+                    pending_goal_coordinates = rviz_goal
+                    pending_goal_name = None
             show_str = f"Speed: Vx={local_vel[0]:.2f}, Vy={local_vel[1]:.2f}, Wz={local_ang_vel[2]:.2f}, "
             if counter % control_decimation == 0:
                 if keyboard.goal_cancel_requested:
                     goal_navigator.cancel()
                     keyboard.goal_cancel_requested = False
                 if keyboard.goal_request is not None:
-                    goal_navigator.set_named_goal(
-                        keyboard.goal_request, d.qpos[:2], d.time
-                    )
+                    if ros2_vslam is None:
+                        goal_navigator.set_named_goal(
+                            keyboard.goal_request, d.qpos[:2], d.time
+                        )
+                    else:
+                        pending_goal_name = keyboard.goal_request
                     keyboard.goal_request = None
+
+                if global_pose is not None and goal_navigator.map_ready:
+                    if pending_goal_coordinates is not None:
+                        goal_navigator.set_goal(
+                            pending_goal_coordinates, global_pose[:2], d.time
+                        )
+                        pending_goal_coordinates = None
+                    if pending_goal_name is not None:
+                        goal_navigator.set_named_goal(
+                            pending_goal_name, global_pose[:2], d.time
+                        )
+                        pending_goal_name = None
 
                 goal_control = goal_navigator.active
                 if goal_control:
-                    manual_cmd = goal_navigator.update(
-                        d.qpos[:2], get_yaw(d.qpos[3:7]), d.time
-                    )
+                    if global_pose is None:
+                        # Do not dead-reckon a global route from MuJoCo truth if
+                        # visual tracking is temporarily lost.
+                        manual_cmd = np.zeros(3, dtype=np.float32)
+                    else:
+                        manual_cmd = goal_navigator.update(
+                            global_pose[:2], global_pose[2], d.time
+                        )
+                        if high_level_navigator.enabled and goal_navigator.active:
+                            waypoint_index = min(
+                                goal_navigator.waypoint_index,
+                                len(goal_navigator.path) - 1,
+                            )
+                            learned_command = high_level_navigator.command(
+                                goal_navigator.path[waypoint_index],
+                                global_pose[:2],
+                                global_pose[2],
+                                np.array(
+                                    [
+                                        local_vel[0],
+                                        local_vel[1],
+                                        local_ang_vel[2],
+                                    ],
+                                    dtype=np.float32,
+                                ),
+                                lidar,
+                            )
+                            if learned_command is not None:
+                                manual_cmd = learned_command
                 elif use_joystick:
                     manual_cmd = get_xbox_command(joystick, config["max_cmd"])
                 else:
                     manual_cmd = keyboard.command.copy()
+                navigation_yaw = (
+                    float(global_pose[2])
+                    if global_pose is not None
+                    else get_yaw(d.qpos[3:7])
+                )
                 cmd = navigator.update(
                     manual_cmd,
                     lidar,
-                    get_yaw(d.qpos[3:7]),
+                    navigation_yaw,
                     autonomous=goal_control,
                     lateral_velocity=float(local_vel[1]),
                     goal_distance=(
@@ -437,7 +512,15 @@ if __name__ == "__main__":
                 else:
                     stationary_updates = 0
                     hold_active = False
-                show_str += f"Cmd: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, Wz={cmd[2]:.2f}"
+                controller_label = (
+                    " NAV-RL"
+                    if goal_control and high_level_navigator.enabled
+                    else ""
+                )
+                show_str += (
+                    f"Cmd: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, "
+                    f"Wz={cmd[2]:.2f}{controller_label}"
+                )
                 if counter % (control_decimation * 50) == 0:
                     print(
                         f"{show_str}, RTF={realtime_factor:.2f}x | "

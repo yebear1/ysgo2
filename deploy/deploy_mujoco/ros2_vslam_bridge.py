@@ -1,23 +1,32 @@
+"""ROS 2 RGB-D sensor bridge for an external, graph-based VSLAM system.
+
+This module deliberately does not read the simulated robot's world pose. It
+publishes only camera measurements and calibration. RTAB-Map owns visual
+odometry, loop closure, graph optimization and the global occupancy map.
+"""
+
 import math
 
-import cv2
 import mujoco
 import numpy as np
 
 
 class Ros2VslamBridge:
-    """Publish a simulated RGB-D camera to ROS 2 for RTAB-Map VSLAM."""
+    """Publish simulated sensors and consume RTAB-Map's optimized products."""
 
     def __init__(self, model, data, config):
         try:
             import rclpy
             from geometry_msgs.msg import PoseStamped, TransformStamped
-            from nav_msgs.msg import OccupancyGrid, Odometry, Path
+            from nav_msgs.msg import OccupancyGrid, Odometry
+            from rclpy.duration import Duration
             from rclpy.node import Node
             from rclpy.qos import qos_profile_sensor_data
-            from sensor_msgs.msg import CameraInfo, Image
+            from rclpy.time import Time
+            from sensor_msgs.msg import CameraInfo, Image, Imu
             from std_msgs.msg import String
-            from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+            from std_srvs.srv import Empty
+            from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
         except ImportError as exc:
             raise RuntimeError(
                 "ROS 2 Python modules are unavailable. Launch with "
@@ -25,44 +34,48 @@ class Ros2VslamBridge:
             ) from exc
 
         self._rclpy = rclpy
+        self._Time = Time
+        self._Duration = Duration
         self._Image = Image
         self._CameraInfo = CameraInfo
-        self._PoseStamped = PoseStamped
-        self._TransformStamped = TransformStamped
-        self._OccupancyGrid = OccupancyGrid
-        self._Odometry = Odometry
-        self._Path = Path
+        self._Imu = Imu
         self._String = String
+        self._TransformStamped = TransformStamped
+        self._Empty = Empty
         self.model = model
         self.data = data
+
         self.width = int(config.get("width", 640))
         self.height = int(config.get("height", 360))
         self.camera_name = str(config.get("camera_name", "front_rgbd"))
         self.frame_id = str(config.get("frame_id", "go2_camera_optical_frame"))
         self.base_frame_id = str(config.get("base_frame_id", "base_link"))
+        self.map_frame_id = str(config.get("map_frame_id", "map"))
         self.publish_interval = float(config.get("publish_interval", 0.10))
-        self.map_publish_interval = float(config.get("map_publish_interval", 0.50))
+        self.min_depth = float(config.get("min_depth", 0.12))
+        self.max_depth = float(config.get("max_depth", 8.0))
         self.last_publish_time = -np.inf
-        self.last_map_publish_time = -np.inf
-        self.map_resolution = float(config.get("map_resolution", 0.05))
-        self.map_extent = float(config.get("map_extent", 30.0))
-        self.map_cells = int(round(self.map_extent / self.map_resolution))
-        self.map_origin = -0.5 * self.map_extent
-        self.occupancy = np.full(
-            (self.map_cells, self.map_cells), -1, dtype=np.int8
+        self.imu_publish_interval = float(config.get("imu_publish_interval", 0.01))
+        self.last_imu_publish_time = -np.inf
+        self._imu_last_simulation_time = None
+        self._imu_orientation = np.array(
+            [1.0, 0.0, 0.0, 0.0], dtype=np.float64
         )
-        self.previous_gray = None
-        self.previous_depth = None
-        self.previous_keypoints = None
-        self.previous_descriptors = None
-        self.tracking_mode = "INITIALIZING"
-        self.feature_count = 0
-        self.path = Path()
-        self.path.header.frame_id = "map"
+
+        self.tracking_mode = "WAITING FOR RTAB-MAP"
+        self.odometry_messages = 0
+        self.map_updates = 0
+        self.loop_closures = 0
+        self._last_loop_closure_id = 0
+        self._odometry_lost = True
+        self._global_pose = None
+        self._latest_map = None
+        self._consumed_map_update = 0
+        self._navigation_goal = None
 
         if not rclpy.ok():
             rclpy.init(args=None)
-        self.node = Node("go2_mujoco_rgbd")
+        self.node = Node("go2_mujoco_rgbd_sensor")
         self.rgb_pub = self.node.create_publisher(
             Image, "/go2/camera/color/image_raw", qos_profile_sensor_data
         )
@@ -70,12 +83,57 @@ class Ros2VslamBridge:
             Image, "/go2/camera/depth/image_raw", qos_profile_sensor_data
         )
         self.info_pub = self.node.create_publisher(
-            CameraInfo, "/go2/camera/color/camera_info", qos_profile_sensor_data
+            CameraInfo,
+            "/go2/camera/color/camera_info",
+            qos_profile_sensor_data,
         )
-        self.map_pub = self.node.create_publisher(OccupancyGrid, "/map", 1)
-        self.path_pub = self.node.create_publisher(Path, "/go2/vslam/path", 1)
-        self.odom_pub = self.node.create_publisher(Odometry, "/go2/vslam/odom", 10)
-        self.status_pub = self.node.create_publisher(String, "/go2/vslam/status", 10)
+        self.imu_pub = self.node.create_publisher(
+            Imu, "/go2/imu/data", qos_profile_sensor_data
+        )
+        self.status_pub = self.node.create_publisher(
+            String, "/go2/vslam/status", 10
+        )
+        self.reset_odom_client = self.node.create_client(
+            Empty, "/rtabmap/reset_odom"
+        )
+        # RTAB-Map's visual odometry uses sensor-data (best-effort) QoS.
+        # Matching it is essential: a default reliable subscription is not
+        # compatible with that publisher and silently receives no poses.
+        self.node.create_subscription(
+            Odometry,
+            "/rtabmap/odom",
+            self._odom_callback,
+            qos_profile_sensor_data,
+        )
+        self.node.create_subscription(
+            OccupancyGrid, "/map", self._map_callback, 1
+        )
+        self.node.create_subscription(
+            PoseStamped, "/goal_pose", self._goal_callback, 10
+        )
+
+        # Keep the sensor bridge usable enough to report an installation error
+        # even when rtabmap_msgs has not been installed yet.
+        try:
+            from rtabmap_msgs.msg import Info, OdomInfo
+
+            self.node.create_subscription(
+                Info, "/rtabmap/info", self._info_callback, 10
+            )
+            self.node.create_subscription(
+                OdomInfo,
+                "/rtabmap/odom_info",
+                self._odom_info_callback,
+                qos_profile_sensor_data,
+            )
+        except ImportError:
+            pass
+
+        self.tf_buffer = Buffer(cache_time=Duration(seconds=30.0))
+        self.tf_listener = TransformListener(
+            self.tf_buffer, self.node, spin_thread=False
+        )
+        self.static_broadcaster = StaticTransformBroadcaster(self.node)
 
         self.renderer = mujoco.Renderer(
             model, height=self.height, width=self.width
@@ -86,25 +144,32 @@ class Ros2VslamBridge:
         if camera_id < 0:
             raise RuntimeError(f"MuJoCo camera not found: {self.camera_name}")
         self.fovy = float(model.cam_fovy[camera_id])
+        self._imu_gyro_slice = self._sensor_slice("imu_gyro")
+        self._imu_accel_slice = self._sensor_slice("imu_accel")
         self.camera_info = self._build_camera_info()
-        self.camera_matrix = np.asarray(self.camera_info.k, dtype=np.float64).reshape(3, 3)
-        self.orb = cv2.ORB_create(nfeatures=1400, fastThreshold=8)
-        self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-        self.base_id = model.body("base").id
-        self.base_to_camera = np.eye(4, dtype=np.float64)
-        self.base_to_camera[:3, :3] = np.array(
-            [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+        self._publish_static_camera_transform()
+        print(
+            "ROS 2 RGB-D sensor bridge (ground-truth-free): "
+            f"{self.width}x{self.height} at "
+            f"{1.0 / self.publish_interval:.1f} Hz"
         )
-        self.base_to_camera[:3, 3] = (0.30, 0.0, 0.04)
-        self.map_to_base = np.eye(4, dtype=np.float64)
-        self.map_to_base[2, 3] = float(data.xpos[self.base_id][2])
-        self.map_to_camera = self.map_to_base @ self.base_to_camera
-        self.previous_ground_truth = self._ground_truth_pose()
 
-        self.static_broadcaster = StaticTransformBroadcaster(self.node)
-        self.dynamic_broadcaster = TransformBroadcaster(self.node)
-        transform = TransformStamped()
+    def _sensor_slice(self, name):
+        sensor_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SENSOR, name
+        )
+        if sensor_id < 0:
+            raise RuntimeError(f"MuJoCo sensor not found: {name}")
+        address = int(self.model.sensor_adr[sensor_id])
+        dimension = int(self.model.sensor_dim[sensor_id])
+        if dimension != 3:
+            raise RuntimeError(
+                f"MuJoCo sensor '{name}' must have dimension 3, got {dimension}"
+            )
+        return slice(address, address + dimension)
+
+    def _publish_static_camera_transform(self):
+        transform = self._TransformStamped()
         transform.header.stamp = self.node.get_clock().now().to_msg()
         transform.header.frame_id = self.base_frame_id
         transform.child_frame_id = self.frame_id
@@ -118,57 +183,6 @@ class Ros2VslamBridge:
         transform.transform.rotation.y = 0.5
         transform.transform.rotation.z = -0.5
         self.static_broadcaster.sendTransform(transform)
-        print(
-            "ROS 2 RGB-D VSLAM: "
-            f"{self.width}x{self.height} at {1.0 / self.publish_interval:.1f} Hz, "
-            f"map={self.map_extent:.0f}m/{self.map_resolution:.2f}m"
-        )
-
-    def _ground_truth_pose(self):
-        pose = np.eye(4, dtype=np.float64)
-        pose[:3, :3] = self.data.xmat[self.base_id].reshape(3, 3)
-        pose[:3, 3] = self.data.xpos[self.base_id]
-        return pose
-
-    @staticmethod
-    def _rotation_to_quaternion(rotation):
-        trace = float(np.trace(rotation))
-        if trace > 0.0:
-            scale = math.sqrt(trace + 1.0) * 2.0
-            qw = 0.25 * scale
-            qx = (rotation[2, 1] - rotation[1, 2]) / scale
-            qy = (rotation[0, 2] - rotation[2, 0]) / scale
-            qz = (rotation[1, 0] - rotation[0, 1]) / scale
-        else:
-            index = int(np.argmax(np.diag(rotation)))
-            if index == 0:
-                scale = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
-                qw = (rotation[2, 1] - rotation[1, 2]) / scale
-                qx = 0.25 * scale
-                qy = (rotation[0, 1] + rotation[1, 0]) / scale
-                qz = (rotation[0, 2] + rotation[2, 0]) / scale
-            elif index == 1:
-                scale = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
-                qw = (rotation[0, 2] - rotation[2, 0]) / scale
-                qx = (rotation[0, 1] + rotation[1, 0]) / scale
-                qy = 0.25 * scale
-                qz = (rotation[1, 2] + rotation[2, 1]) / scale
-            else:
-                scale = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
-                qw = (rotation[1, 0] - rotation[0, 1]) / scale
-                qx = (rotation[0, 2] + rotation[2, 0]) / scale
-                qy = (rotation[1, 2] + rotation[2, 1]) / scale
-                qz = 0.25 * scale
-        return qx, qy, qz, qw
-
-    @staticmethod
-    def _set_pose(message, transform):
-        message.position.x, message.position.y, message.position.z = transform[:3, 3]
-        qx, qy, qz, qw = Ros2VslamBridge._rotation_to_quaternion(transform[:3, :3])
-        message.orientation.x = qx
-        message.orientation.y = qy
-        message.orientation.z = qz
-        message.orientation.w = qw
 
     def _build_camera_info(self):
         info = self._CameraInfo()
@@ -199,194 +213,193 @@ class Ros2VslamBridge:
         message.data = array.tobytes()
         return message
 
-    def _estimate_visual_motion(self, gray, depth):
-        keypoints, descriptors = self.orb.detectAndCompute(gray, None)
-        self.feature_count = len(keypoints)
-        success = False
-        current_ground_truth = self._ground_truth_pose()
-        odometry_delta = (
-            np.linalg.inv(self.previous_ground_truth) @ current_ground_truth
-        )
-        predicted_map_to_base = self.map_to_base @ odometry_delta
-        previous_ground_truth_camera = (
-            self.previous_ground_truth @ self.base_to_camera
-        )
-        current_ground_truth_camera = current_ground_truth @ self.base_to_camera
-        expected_camera_current_from_previous = (
-            np.linalg.inv(current_ground_truth_camera)
-            @ previous_ground_truth_camera
-        )
-        if (
-            self.previous_descriptors is not None
-            and descriptors is not None
-            and len(descriptors) >= 12
-        ):
-            matches = self.matcher.match(self.previous_descriptors, descriptors)
-            matches = [match for match in matches if match.distance <= 55]
-            matches = sorted(matches, key=lambda match: match.distance)[:350]
-            points_3d = []
-            points_2d = []
-            fx, fy = self.camera_matrix[0, 0], self.camera_matrix[1, 1]
-            cx, cy = self.camera_matrix[0, 2], self.camera_matrix[1, 2]
-            for match in matches:
-                previous = self.previous_keypoints[match.queryIdx].pt
-                u = int(round(previous[0]))
-                v = int(round(previous[1]))
-                if not (0 <= u < self.width and 0 <= v < self.height):
-                    continue
-                z = float(self.previous_depth[v, u])
-                if not np.isfinite(z) or z < 0.15 or z > 6.0:
-                    continue
-                points_3d.append(
-                    ((previous[0] - cx) * z / fx, (previous[1] - cy) * z / fy, z)
+    def _publish_imu(self, simulation_time):
+        """Publish gyro-integrated orientation without reading world pose."""
+        simulation_time = float(simulation_time)
+        previous_time = self._imu_last_simulation_time
+        self._imu_last_simulation_time = simulation_time
+        gyro = np.asarray(
+            self.data.sensordata[self._imu_gyro_slice], dtype=np.float64
+        ).copy()
+        accel = np.asarray(
+            self.data.sensordata[self._imu_accel_slice], dtype=np.float64
+        ).copy()
+
+        if previous_time is not None:
+            dt = simulation_time - previous_time
+            if 0.0 < dt <= 0.05:
+                w, x, y, z = self._imu_orientation
+                gx, gy, gz = gyro
+                derivative = 0.5 * np.array(
+                    [
+                        -x * gx - y * gy - z * gz,
+                        w * gx + y * gz - z * gy,
+                        w * gy - x * gz + z * gx,
+                        w * gz + x * gy - y * gx,
+                    ],
+                    dtype=np.float64,
                 )
-                points_2d.append(keypoints[match.trainIdx].pt)
-            if len(points_3d) >= 12:
-                solved, rotation_vector, translation, inliers = cv2.solvePnPRansac(
-                    np.asarray(points_3d, dtype=np.float32),
-                    np.asarray(points_2d, dtype=np.float32),
-                    self.camera_matrix,
-                    None,
-                    iterationsCount=100,
-                    reprojectionError=2.5,
-                    confidence=0.995,
-                    flags=cv2.SOLVEPNP_EPNP,
-                )
-                if solved and inliers is not None and len(inliers) >= 10:
-                    rotation, _ = cv2.Rodrigues(rotation_vector)
-                    camera_current_from_previous = np.eye(4, dtype=np.float64)
-                    camera_current_from_previous[:3, :3] = rotation
-                    camera_current_from_previous[:3, 3] = translation[:, 0]
-                    tracking_error = (
-                        np.linalg.inv(expected_camera_current_from_previous)
-                        @ camera_current_from_previous
-                    )
-                    translation_error = float(
-                        np.linalg.norm(tracking_error[:3, 3])
-                    )
-                    rotation_error = math.acos(
-                        np.clip(
-                            (np.trace(tracking_error[:3, :3]) - 1.0) * 0.5,
-                            -1.0,
-                            1.0,
-                        )
-                    )
-                    inlier_ratio = len(inliers) / max(len(points_3d), 1)
-                    if (
-                        translation_error < 0.06
-                        and rotation_error < 0.12
-                        and inlier_ratio >= 0.30
-                    ):
-                        self.tracking_mode = (
-                            f"VISUAL+ODOM ({len(inliers)} inliers, "
-                            f"{translation_error * 100.0:.1f}cm residual)"
-                        )
-                        success = True
+                self._imu_orientation += derivative * dt
+                norm = float(np.linalg.norm(self._imu_orientation))
+                if norm > 1.0e-9:
+                    self._imu_orientation /= norm
 
-        # Keep the globally consistent inertial/leg-odometry prediction as the
-        # map pose. Vision validates that increment and supplies the RGB-D
-        # structure, but a single visually repetitive wall can no longer move
-        # the entire map by tens of centimetres per frame.
-        self.map_to_base = predicted_map_to_base
-        self.map_to_camera = self.map_to_base @ self.base_to_camera
-        if not success:
-            self.tracking_mode = "ODOMETRY-AIDED"
-        self.previous_ground_truth = current_ground_truth
-        self.previous_gray = gray
-        self.previous_depth = depth
-        self.previous_keypoints = keypoints
-        self.previous_descriptors = descriptors
-
-    def _map_index(self, x, y):
-        col = int((x - self.map_origin) / self.map_resolution)
-        row = int((y - self.map_origin) / self.map_resolution)
-        return col, row
-
-    def _integrate_depth(self, depth):
-        free_mask = np.zeros_like(self.occupancy, dtype=np.uint8)
-        occupied_mask = np.zeros_like(self.occupancy, dtype=np.uint8)
-        camera_position = self.map_to_camera[:3, 3]
-        start_col, start_row = self._map_index(
-            camera_position[0], camera_position[1]
-        )
-        fx, fy = self.camera_matrix[0, 0], self.camera_matrix[1, 1]
-        cx, cy = self.camera_matrix[0, 2], self.camera_matrix[1, 2]
-        for v in range(4, self.height - 4, 8):
-            for u in range(4, self.width - 4, 8):
-                z = float(depth[v, u])
-                if not np.isfinite(z) or z < 0.20 or z > 6.0:
-                    continue
-                point_camera = np.array(
-                    [(u - cx) * z / fx, (v - cy) * z / fy, z, 1.0]
-                )
-                point_map = self.map_to_camera @ point_camera
-                end_col, end_row = self._map_index(point_map[0], point_map[1])
-                if not (
-                    0 <= start_col < self.map_cells
-                    and 0 <= start_row < self.map_cells
-                    and 0 <= end_col < self.map_cells
-                    and 0 <= end_row < self.map_cells
-                ):
-                    continue
-                cv2.line(
-                    free_mask,
-                    (start_col, start_row),
-                    (end_col, end_row),
-                    1,
-                    2,
-                )
-                if 0.06 <= point_map[2] <= 1.80:
-                    # One depth return represents one 5 cm map cell.  Do not
-                    # dilate it here: footprint clearance belongs to the
-                    # planner, while RViz must show the measured object edge.
-                    occupied_mask[end_row, end_col] = 1
-        self.occupancy[free_mask.astype(bool)] = 0
-        self.occupancy[occupied_mask.astype(bool)] = 100
-
-    def _publish_pose(self, stamp):
-        transform = self._TransformStamped()
-        transform.header.stamp = stamp
-        transform.header.frame_id = "map"
-        transform.child_frame_id = self.base_frame_id
-        transform.transform.translation.x = float(self.map_to_base[0, 3])
-        transform.transform.translation.y = float(self.map_to_base[1, 3])
-        transform.transform.translation.z = float(self.map_to_base[2, 3])
-        qx, qy, qz, qw = self._rotation_to_quaternion(self.map_to_base[:3, :3])
-        transform.transform.rotation.x = qx
-        transform.transform.rotation.y = qy
-        transform.transform.rotation.z = qz
-        transform.transform.rotation.w = qw
-        self.dynamic_broadcaster.sendTransform(transform)
-
-        odometry = self._Odometry()
-        odometry.header = transform.header
-        odometry.child_frame_id = self.base_frame_id
-        self._set_pose(odometry.pose.pose, self.map_to_base)
-        self.odom_pub.publish(odometry)
-
-        pose = self._PoseStamped()
-        pose.header = transform.header
-        self._set_pose(pose.pose, self.map_to_base)
-        self.path.poses.append(pose)
-        if len(self.path.poses) > 5000:
-            self.path.poses = self.path.poses[-5000:]
-        self.path.header.stamp = stamp
-        self.path_pub.publish(self.path)
-
-    def _publish_map(self, stamp):
-        message = self._OccupancyGrid()
+        if simulation_time - self.last_imu_publish_time < self.imu_publish_interval:
+            return
+        self.last_imu_publish_time = simulation_time
+        stamp = self.node.get_clock().now().to_msg()
+        message = self._Imu()
         message.header.stamp = stamp
-        message.header.frame_id = "map"
-        message.info.resolution = self.map_resolution
-        message.info.width = self.map_cells
-        message.info.height = self.map_cells
-        message.info.origin.position.x = self.map_origin
-        message.info.origin.position.y = self.map_origin
-        message.info.origin.orientation.w = 1.0
-        message.data = self.occupancy.reshape(-1).tolist()
-        self.map_pub.publish(message)
+        message.header.frame_id = self.base_frame_id
+        w, x, y, z = self._imu_orientation
+        message.orientation.w = float(w)
+        message.orientation.x = float(x)
+        message.orientation.y = float(y)
+        message.orientation.z = float(z)
+        message.angular_velocity.x = float(gyro[0])
+        message.angular_velocity.y = float(gyro[1])
+        message.angular_velocity.z = float(gyro[2])
+        message.linear_acceleration.x = float(accel[0])
+        message.linear_acceleration.y = float(accel[1])
+        message.linear_acceleration.z = float(accel[2])
+        message.orientation_covariance = [
+            0.0025, 0.0, 0.0,
+            0.0, 0.0025, 0.0,
+            0.0, 0.0, 0.0025,
+        ]
+        message.angular_velocity_covariance = [
+            0.0004, 0.0, 0.0,
+            0.0, 0.0004, 0.0,
+            0.0, 0.0, 0.0004,
+        ]
+        message.linear_acceleration_covariance = [
+            0.01, 0.0, 0.0,
+            0.0, 0.01, 0.0,
+            0.0, 0.0, 0.01,
+        ]
+        self.imu_pub.publish(message)
+
+    def _odom_callback(self, message):
+        self.odometry_messages += 1
+        q = message.pose.pose.orientation
+        quaternion_norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w
+        self._odometry_lost = quaternion_norm < 0.5
+        if not self._odometry_lost and (
+            self.tracking_mode.startswith("WAITING")
+            or self.tracking_mode == "VISUAL TRACKING LOST"
+        ):
+            self.tracking_mode = "VISUAL ODOMETRY"
+
+    def _odom_info_callback(self, message):
+        # A null odometry message is still published while tracking is lost.
+        # Invalidate the cached map pose immediately so navigation can never
+        # continue on a stale transform.
+        if bool(message.lost):
+            self._odometry_lost = True
+            self._global_pose = None
+            self.tracking_mode = "VISUAL TRACKING LOST"
+
+    def _map_callback(self, message):
+        width = int(message.info.width)
+        height = int(message.info.height)
+        if width <= 0 or height <= 0 or len(message.data) != width * height:
+            return
+        self.map_updates += 1
+        self._latest_map = {
+            "update": self.map_updates,
+            "resolution": float(message.info.resolution),
+            "width": width,
+            "height": height,
+            "origin": (
+                float(message.info.origin.position.x),
+                float(message.info.origin.position.y),
+            ),
+            "data": np.asarray(message.data, dtype=np.int8)
+            .reshape(height, width)
+            .copy(),
+        }
+
+    def _info_callback(self, message):
+        loop_id = int(getattr(message, "loop_closure_id", 0))
+        proximity_id = int(getattr(message, "proximity_detection_id", 0))
+        accepted_id = loop_id if loop_id > 0 else proximity_id
+        if accepted_id > 0 and accepted_id != self._last_loop_closure_id:
+            self.loop_closures += 1
+            self._last_loop_closure_id = accepted_id
+            self.tracking_mode = f"LOOP CLOSED #{self.loop_closures}"
+
+    def _goal_callback(self, message):
+        if message.header.frame_id not in ("", self.map_frame_id):
+            self.node.get_logger().warning(
+                f"Ignoring goal in '{message.header.frame_id}'; expected "
+                f"'{self.map_frame_id}'"
+            )
+            return
+        self._navigation_goal = np.array(
+            [message.pose.position.x, message.pose.position.y],
+            dtype=np.float64,
+        )
+
+    @staticmethod
+    def _yaw_from_quaternion(rotation):
+        return math.atan2(
+            2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+            1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+        )
+
+    def _update_global_pose(self):
+        if self._odometry_lost:
+            self._global_pose = None
+            return
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame_id,
+                self.base_frame_id,
+                self._Time(),
+                timeout=self._Duration(seconds=0.0),
+            )
+        except Exception:
+            return
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
+        self._global_pose = np.array(
+            [translation.x, translation.y, self._yaw_from_quaternion(rotation)],
+            dtype=np.float64,
+        )
+        if not self.tracking_mode.startswith("LOOP CLOSED"):
+            self.tracking_mode = "GLOBAL TRACKING"
+
+    @property
+    def global_pose(self):
+        """Latest graph-optimized ``[x, y, yaw]`` pose, or ``None``."""
+        return None if self._global_pose is None else self._global_pose.copy()
+
+    def take_navigation_map(self):
+        """Return each optimized occupancy-grid revision exactly once."""
+        if (
+            self._latest_map is None
+            or self._latest_map["update"] == self._consumed_map_update
+        ):
+            return None
+        self._consumed_map_update = self._latest_map["update"]
+        result = dict(self._latest_map)
+        result["data"] = self._latest_map["data"].copy()
+        return result
+
+    def take_navigation_goal(self):
+        """Return and consume the latest RViz global goal."""
+        if self._navigation_goal is None:
+            return None
+        goal = self._navigation_goal.copy()
+        self._navigation_goal = None
+        return goal
 
     def update(self, simulation_time):
+        # Always service subscriptions so graph corrections are available to
+        # the controller even between camera frames.
+        self._rclpy.spin_once(self.node, timeout_sec=0.0)
+        self._update_global_pose()
+        self._publish_imu(simulation_time)
         if simulation_time - self.last_publish_time < self.publish_interval:
             return
         self.last_publish_time = float(simulation_time)
@@ -399,41 +412,44 @@ class Ros2VslamBridge:
         depth = self.renderer.render().astype(np.float32, copy=True)
         self.renderer.disable_depth_rendering()
 
+        # MuJoCo represents pixels that see the far clipping plane as a very
+        # large metric depth (hundreds of metres), not as an invalid sample.
+        # Feeding those values to RGB-D PnP makes distant/background features
+        # look geometrically valid and quickly destabilizes visual odometry.
+        # Real RGB-D cameras report those pixels as zero, so emulate that here.
+        valid_depth = np.isfinite(depth)
+        valid_depth &= depth >= self.min_depth
+        valid_depth &= depth <= self.max_depth
+        depth[~valid_depth] = 0.0
+
         stamp = self.node.get_clock().now().to_msg()
         self.camera_info.header.stamp = stamp
         self.rgb_pub.publish(self._image_message(rgb, stamp, "rgb8"))
         self.depth_pub.publish(self._image_message(depth, stamp, "32FC1"))
         self.info_pub.publish(self.camera_info)
-        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-        self._estimate_visual_motion(gray, depth)
-        self._integrate_depth(depth)
-        self._publish_pose(stamp)
-        if simulation_time - self.last_map_publish_time >= self.map_publish_interval:
-            self.last_map_publish_time = float(simulation_time)
-            self._publish_map(stamp)
+
         status = self._String()
+        pose_status = "pose=ready" if self._global_pose is not None else "pose=waiting"
         status.data = (
-            f"{self.tracking_mode}; features={self.feature_count}; "
-            f"mapped={(self.occupancy >= 0).sum()} cells"
+            f"{self.tracking_mode}; {pose_status}; "
+            f"odom={self.odometry_messages}; maps={self.map_updates}; "
+            f"loops={self.loop_closures}"
         )
         self.status_pub.publish(status)
-        self._rclpy.spin_once(self.node, timeout_sec=0.0)
 
     def reset(self):
-        self.occupancy.fill(-1)
-        self.previous_gray = None
-        self.previous_depth = None
-        self.previous_keypoints = None
-        self.previous_descriptors = None
-        self.previous_ground_truth = self._ground_truth_pose()
-        self.map_to_base = np.eye(4, dtype=np.float64)
-        self.map_to_base[2, 3] = float(self.data.xpos[self.base_id][2])
-        self.map_to_camera = self.map_to_base @ self.base_to_camera
-        self.path.poses.clear()
-        self.tracking_mode = "INITIALIZING"
-        self.feature_count = 0
+        # A simulator reset is deliberately not allowed to erase the external
+        # RTAB-Map database. Reset only local visual odometry; the global graph
+        # then relocalizes the camera against the persistent map.
+        if self.reset_odom_client.service_is_ready():
+            self.reset_odom_client.call_async(self._Empty.Request())
+        self._global_pose = None
+        self._odometry_lost = True
+        self.tracking_mode = "WAITING FOR RELOCALIZATION"
         self.last_publish_time = -np.inf
-        self.last_map_publish_time = -np.inf
+        self.last_imu_publish_time = -np.inf
+        self._imu_last_simulation_time = None
+        self._imu_orientation[:] = (1.0, 0.0, 0.0, 0.0)
 
     def close(self):
         self.renderer.close()

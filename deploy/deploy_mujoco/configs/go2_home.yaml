@@ -24,12 +24,13 @@ ros2_vslam:
   camera_name: "front_rgbd"
   frame_id: "go2_camera_optical_frame"
   base_frame_id: "base_link"
-  width: 320
-  height: 180
-  publish_interval: 0.20
-  map_publish_interval: 0.50
-  map_resolution: 0.05
-  map_extent: 30.0
+  map_frame_id: "map"
+  width: 640
+  height: 360
+  publish_interval: 0.10
+  imu_publish_interval: 0.01
+  min_depth: 0.12
+  max_depth: 8.0
 
 kps: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
 kds: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
@@ -93,6 +94,12 @@ navigation:
   advance_speed: 0.22
   forward_stop_distance: 0.20
   advance_updates: 100
+  # If one side wall blocks the full turning sweep, step sideways toward the
+  # measured open side before retrying the requested turn.
+  body_half_length: 0.39
+  lateral_escape_speed: 0.20
+  lateral_stop_distance: 0.12
+  lateral_escape_updates: 120
   # A shallow moving correction uses the measured body-width corridor.  It is
   # not an obstacle inflation radius and does not alter scene geometry.
   forward_arc_max_deg: 15.0
@@ -139,6 +146,18 @@ goal_navigation:
     dining_room: [4.0, -3.2]
     kitchen: [8.8, -0.1]
     bedroom: [5.0, 3.0]
+
+# PPO chooses body velocity commands toward each A* waypoint.  The existing
+# terrain navigator still has final authority for walls, drop-offs and stairs.
+high_level_navigation:
+  enabled: true
+  policy_path: "{LEGGED_GYM_ROOT_DIR}/deploy/pre_train/go2/high_level_nav.pt"
+  max_speed: 0.75
+  max_lateral_speed: 0.30
+  max_yaw_rate: 0.90
+  # Keep straight-line speed unchanged; only slow translation during a hard
+  # turn so the long body and rear legs do not sweep into nearby furniture.
+  turn_speed_reduction: 0.65
 
 mujoco_joint_names: [
   "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",

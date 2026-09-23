@@ -47,6 +47,16 @@ class TerrainNavigator:
             config.get("forward_stop_distance", 0.20)
         )
         self.advance_updates_limit = int(config.get("advance_updates", 100))
+        self.body_half_length = float(config.get("body_half_length", 0.39))
+        self.lateral_escape_speed = float(
+            config.get("lateral_escape_speed", 0.20)
+        )
+        self.lateral_stop_distance = float(
+            config.get("lateral_stop_distance", 0.12)
+        )
+        self.lateral_escape_updates_limit = int(
+            config.get("lateral_escape_updates", 120)
+        )
         self.forward_arc_max_angle = math.radians(
             float(config.get("forward_arc_max_deg", 15.0))
         )
@@ -91,6 +101,7 @@ class TerrainNavigator:
         self.clear_scans = 0
         self.resume_speed = 0.0
         self.backup_updates = 0
+        self.lateral_escape_direction = 0.0
         self.centering_lateral = 0.0
 
     def reset(self):
@@ -100,7 +111,35 @@ class TerrainNavigator:
         self.clear_scans = 0
         self.resume_speed = 0.0
         self.backup_updates = 0
+        self.lateral_escape_direction = 0.0
         self.centering_lateral = 0.0
+
+    def _translation_clearance(self, lidar, angle, lateral=False):
+        """Measure travel outside the physical rectangular body envelope."""
+        if lateral:
+            return lidar.translation_clearance(
+                angle,
+                half_width=self.body_half_length,
+                body_half_length=self.corridor_half_width,
+            )
+        return lidar.translation_clearance(
+            angle,
+            half_width=self.corridor_half_width,
+            body_half_length=self.body_half_length,
+        )
+
+    def _choose_lateral_escape(self, lidar):
+        """Move away from a close side wall before attempting a pivot."""
+        left = self._translation_clearance(lidar, math.pi / 2.0, lateral=True)
+        right = self._translation_clearance(lidar, -math.pi / 2.0, lateral=True)
+        direction, clearance = (
+            (1.0, left) if left >= right else (-1.0, right)
+        )
+        needed = max(
+            self.lateral_stop_distance,
+            self.turning_radius - lidar.planar_clearance() + 0.03,
+        )
+        return (direction, clearance) if clearance > needed else (0.0, clearance)
 
     def _center_forward_command(self, command, lidar, lateral_velocity=0.0):
         """Keep the body centred using side ranges and measured lateral drift."""
@@ -382,26 +421,44 @@ class TerrainNavigator:
 
         # Continue an already selected recovery direction before interpreting
         # the still-present yaw command again.
-        if self.state in ("ADVANCE_FOR_TURN", "BACKUP_FOR_TURN"):
+        if self.state in (
+            "LATERAL_FOR_TURN",
+            "ADVANCE_FOR_TURN",
+            "BACKUP_FOR_TURN",
+        ):
             turn_clearance = lidar.planar_clearance()
             self.hazard = "TURN_SWEEP"
             self.hazard_distance = turn_clearance
             if turn_clearance >= self.turning_radius:
                 self.reset()
                 return command
-            if self.state == "ADVANCE_FOR_TURN":
-                travel_clearance = lidar.translation_clearance(0.0)
+            if self.state == "LATERAL_FOR_TURN":
+                direction = self.lateral_escape_direction
+                travel_clearance = self._translation_clearance(
+                    lidar, direction * math.pi / 2.0, lateral=True
+                )
+                speed = direction * self.lateral_escape_speed
+                limit = self.lateral_escape_updates_limit
+            elif self.state == "ADVANCE_FOR_TURN":
+                travel_clearance = self._translation_clearance(lidar, 0.0)
                 speed = self.advance_speed
                 limit = self.advance_updates_limit
             else:
-                travel_clearance = lidar.translation_clearance(math.pi)
+                travel_clearance = self._translation_clearance(lidar, math.pi)
                 speed = -self.backup_speed
                 limit = self.backup_updates_limit
             if (
-                travel_clearance > self.forward_stop_distance
+                travel_clearance
+                > (
+                    self.lateral_stop_distance
+                    if self.state == "LATERAL_FOR_TURN"
+                    else self.forward_stop_distance
+                )
                 and self.backup_updates < limit
             ):
                 self.backup_updates += 1
+                if self.state == "LATERAL_FOR_TURN":
+                    return np.array([0.0, speed, 0.0], dtype=np.float32)
                 return np.array([speed, 0.0, 0.0], dtype=np.float32)
             self.state = "BLOCKED"
             return np.zeros(3, dtype=np.float32)
@@ -444,15 +501,15 @@ class TerrainNavigator:
             # requested in-place turn.  It must not latch a later straight
             # forward command when the body-width corridor ahead is clear.
             forward_hazard, forward_distance = self.analyze(lidar)
-            straight_forward = (
-                command[0] > 1.0e-3
-                and abs(command[1]) <= 1.0e-3
-                and abs(command[2]) <= 1.0e-3
-            )
-            if straight_forward and forward_hazard == "CLEAR":
+            # A learned controller almost always adds a small lateral/yaw
+            # correction to a forward command.  Treat that as forward motion,
+            # not as a new in-place-pivot request, otherwise BLOCKED can latch
+            # forever even after the measured body-width corridor is clear.
+            forward_motion = command[0] > 1.0e-3
+            if forward_motion and forward_hazard == "CLEAR":
                 self.reset()
                 return command
-            if straight_forward:
+            if forward_motion:
                 angle = self._choose_forward_arc(lidar)
                 if angle is not None:
                     return self._begin_forward_arc(
@@ -477,11 +534,19 @@ class TerrainNavigator:
         if abs(command[2]) > 1.0e-3 and command[0] <= 0.0:
             turn_clearance = lidar.planar_clearance()
             if turn_clearance < self.turning_radius:
-                forward_clearance = lidar.translation_clearance(0.0)
-                rear_clearance = lidar.translation_clearance(math.pi)
+                lateral_direction, _ = self._choose_lateral_escape(lidar)
+                forward_clearance = self._translation_clearance(lidar, 0.0)
+                rear_clearance = self._translation_clearance(lidar, math.pi)
                 self.hazard = "TURN_SWEEP"
                 self.hazard_distance = turn_clearance
                 self.backup_updates = 1
+                if lateral_direction != 0.0:
+                    self.state = "LATERAL_FOR_TURN"
+                    self.lateral_escape_direction = lateral_direction
+                    return np.array(
+                        [0.0, lateral_direction * self.lateral_escape_speed, 0.0],
+                        dtype=np.float32,
+                    )
                 if autonomous and forward_clearance > self.forward_stop_distance:
                     self.state = "ADVANCE_FOR_TURN"
                     return np.array([self.advance_speed, 0.0, 0.0], dtype=np.float32)
@@ -524,7 +589,7 @@ class TerrainNavigator:
                         angle, yaw, command, lidar, lateral_velocity
                     )
             turn_clearance = lidar.planar_clearance()
-            rear_clearance = lidar.translation_clearance(math.pi)
+            rear_clearance = self._translation_clearance(lidar, math.pi)
             if (
                 turn_clearance < self.turning_radius
                 and rear_clearance > self.rear_stop_distance
@@ -577,6 +642,9 @@ class TerrainNavigator:
             return f"NAV: BACKUP FOR TURN  clearance={distance}"
         if self.state == "ADVANCE_FOR_TURN":
             return f"NAV: ADVANCE FOR TURN  clearance={distance}"
+        if self.state == "LATERAL_FOR_TURN":
+            side = "LEFT" if self.lateral_escape_direction > 0.0 else "RIGHT"
+            return f"NAV: MOVE {side} FOR TURN  clearance={distance}"
         if self.state == "BLOCKED":
             return f"NAV: BLOCKED  clearance={distance}"
         if self.state == "STEER_FORWARD":

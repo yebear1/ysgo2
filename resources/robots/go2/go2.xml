@@ -59,6 +59,7 @@
       <geom name="base_sphere1"  type="sphere"   size="0.047"        pos="0.293 0 -0.06"/>
       <site name="lidar_origin" type="cylinder" pos="0.20 0 0.12"
             size="0.045 0.025" rgba="0.04 0.04 0.05 1"/>
+      <site name="imu_site" pos="0 0 0" size="0.004" rgba="0 0 0 0"/>
       <!-- Forward-facing RGB-D camera used by the ROS 2 / RTAB-Map bridge.
            MuJoCo cameras look along local -Z; these axes make +X forward and
            +Z upward in the Go2 base frame. -->
@@ -187,5 +188,12 @@
     <motor name="RR_thigh" joint="RR_thigh_joint"/>
     <motor name="RR_calf"  joint="RR_calf_joint"/>
   </actuator>
+
+  <sensor>
+    <!-- Raw body-frame measurements only. The ROS bridge integrates the gyro;
+         no simulator world pose is exposed to the VSLAM stack. -->
+    <gyro name="imu_gyro" site="imu_site" noise="0.001"/>
+    <accelerometer name="imu_accel" site="imu_site" noise="0.01"/>
+  </sensor>
 
 </mujoco>

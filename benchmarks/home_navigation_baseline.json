@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "created": "2026-09-23",
+  "description": "First deterministic high-level PPO furnished-home baseline",
+  "scenarios": {
+    "tv_console_pass": {
+      "goal_reached": true,
+      "fell": false,
+      "simulation_time_s": 5.582,
+      "travelled_path_m": 2.687,
+      "contact_episodes": 0,
+      "max_contact_force_n": 0.0
+    },
+    "armchair_narrow_passage": {
+      "goal_reached": true,
+      "fell": false,
+      "simulation_time_s": 4.782,
+      "travelled_path_m": 1.696,
+      "contact_episodes": 1,
+      "max_contact_force_n": 139.191
+    },
+    "north_wall_corner_escape": {
+      "goal_reached": false,
+      "fell": false,
+      "simulation_time_s": 24.0,
+      "travelled_path_m": 0.971,
+      "contact_episodes": 0,
+      "max_contact_force_n": 0.0
+    },
+    "multiroom_bedroom": {
+      "goal_reached": true,
+      "fell": false,
+      "simulation_time_s": 14.902,
+      "travelled_path_m": 7.589,
+      "contact_episodes": 0,
+      "max_contact_force_n": 0.0
+    }
+  },
+  "stairs": {
+    "top_reached": true,
+    "fell": false,
+    "simulation_time_s": 12.0,
+    "max_x_m": 3.783,
+    "max_base_height_m": 0.854
+  }
+}

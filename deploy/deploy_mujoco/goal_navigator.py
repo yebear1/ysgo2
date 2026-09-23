@@ -1,4 +1,4 @@
-"""Static-map A* goal navigation for the furnished MuJoCo scene."""
+"""A* goal navigation over static MuJoCo or optimized RTAB-Map grids."""
 
 import heapq
 import math
@@ -38,6 +38,9 @@ class GoalNavigator:
             config.get("smoothing_clearance", 0.30)
         )
         self.terrain_group = int(config.get("terrain_group", 1))
+        self.map_source = str(config.get("map_source", "mujoco")).lower()
+        self.dynamic_map = self.map_source in ("rtabmap", "vslam", "ros")
+        self.occupied_threshold = int(config.get("occupied_threshold", 50))
         self.bounds = np.asarray(
             config.get("bounds", [-2.75, 10.75, -5.75, 5.75]),
             dtype=np.float64,
@@ -47,15 +50,27 @@ class GoalNavigator:
             for name, value in config.get("presets", {}).items()
         }
 
-        self.x_values = np.arange(
-            self.bounds[0], self.bounds[1] + 1.0e-9, self.resolution
-        )
-        self.y_values = np.arange(
-            self.bounds[2], self.bounds[3] + 1.0e-9, self.resolution
-        )
-        self.raw_occupied, self.clearance, self.occupied = (
-            self._build_occupancy_grid()
-        )
+        if self.dynamic_map:
+            self.x_values = np.empty(0, dtype=np.float64)
+            self.y_values = np.empty(0, dtype=np.float64)
+            self.raw_occupied = np.empty((0, 0), dtype=bool)
+            self.known = np.empty((0, 0), dtype=bool)
+            self.clearance = np.empty((0, 0), dtype=np.float32)
+            self.occupied = np.empty((0, 0), dtype=bool)
+            self.map_ready = False
+        else:
+            self.x_values = np.arange(
+                self.bounds[0], self.bounds[1] + 1.0e-9, self.resolution
+            )
+            self.y_values = np.arange(
+                self.bounds[2], self.bounds[3] + 1.0e-9, self.resolution
+            )
+            self.raw_occupied, self.clearance, self.occupied = (
+                self._build_occupancy_grid()
+            )
+            self.known = np.ones_like(self.raw_occupied, dtype=bool)
+            self.map_ready = True
+        self.map_revision = 0
 
         self.active = False
         self.reached = False
@@ -67,6 +82,54 @@ class GoalNavigator:
         self.waypoint_index = 0
         self.last_plan_time = -math.inf
         self.last_distance = math.inf
+
+    def update_occupancy_grid(self, grid):
+        """Replace the planning grid with RTAB-Map's optimized global map."""
+        if not self.dynamic_map or grid is None:
+            return False
+        width = int(grid["width"])
+        height = int(grid["height"])
+        resolution = float(grid["resolution"])
+        data = np.asarray(grid["data"], dtype=np.int8)
+        if (
+            width <= 0
+            or height <= 0
+            or resolution <= 0.0
+            or data.shape != (height, width)
+        ):
+            return False
+
+        origin_x, origin_y = grid["origin"]
+        self.resolution = resolution
+        self.x_values = origin_x + (np.arange(width) + 0.5) * resolution
+        self.y_values = origin_y + (np.arange(height) + 0.5) * resolution
+        self.bounds = np.array(
+            [
+                self.x_values[0],
+                self.x_values[-1],
+                self.y_values[0],
+                self.y_values[-1],
+            ],
+            dtype=np.float64,
+        )
+
+        known = data >= 0
+        # Unknown cells are not navigable. They become free only after the
+        # RGB-D mapper has actually observed them.
+        raw_yx = (~known) | (data >= self.occupied_threshold)
+        self.raw_occupied = raw_yx.T.copy()
+        self.known = known.T.copy()
+        free_yx = (~raw_yx).astype(np.uint8)
+        self.clearance = (
+            cv2.distanceTransform(
+                free_yx, cv2.DIST_L2, cv2.DIST_MASK_PRECISE
+            ).T
+            * resolution
+        ).astype(np.float32)
+        self.occupied = self.raw_occupied | (self.clearance < self.robot_radius)
+        self.map_ready = bool(np.any(known & (data < self.occupied_threshold)))
+        self.map_revision += 1
+        return self.map_ready
 
     @property
     def preset_names(self):
@@ -120,6 +183,13 @@ class GoalNavigator:
         return (
             int(np.clip(ix, 0, len(self.x_values) - 1)),
             int(np.clip(iy, 0, len(self.y_values) - 1)),
+        )
+
+    def _world_in_bounds(self, point):
+        return bool(
+            self.map_ready
+            and self.bounds[0] <= float(point[0]) <= self.bounds[1]
+            and self.bounds[2] <= float(point[1]) <= self.bounds[3]
         )
 
     def _grid_to_world(self, cell):
@@ -236,8 +306,33 @@ class GoalNavigator:
         return simplified
 
     def plan(self, start_position, simulation_time=0.0):
-        start = self._nearest_free(self._world_to_grid(start_position))
-        goal = self._nearest_free(self._world_to_grid(self.goal))
+        if not self.map_ready:
+            self.failed = True
+            self.active = False
+            self.path = []
+            return False
+        if self.dynamic_map and (
+            not self._world_in_bounds(start_position)
+            or not self._world_in_bounds(self.goal)
+        ):
+            self.failed = True
+            self.active = False
+            self.path = []
+            return False
+        start_cell = self._world_to_grid(start_position)
+        goal_cell = self._world_to_grid(self.goal)
+        if self.dynamic_map and not self.known[goal_cell]:
+            self.failed = True
+            self.active = False
+            self.path = []
+            return False
+        # A forward-facing RGB-D camera does not observe the footprint under
+        # (or immediately behind) the robot, so the exact current map cell can
+        # legitimately remain unknown.  `_nearest_free()` snaps only the
+        # start to the closest observed, inflated-free cell; unknown cells are
+        # still never traversed and the requested goal must itself be known.
+        start = self._nearest_free(start_cell)
+        goal = self._nearest_free(goal_cell)
         if start is None or goal is None:
             self.failed = True
             self.active = False
@@ -365,6 +460,8 @@ class GoalNavigator:
             scene.ngeom += 1
 
     def status_text(self):
+        if self.dynamic_map and not self.map_ready:
+            return "GOAL: waiting for RTAB-Map occupancy grid"
         if self.active:
             return (
                 f"GOAL: {self.goal_name} ({self.goal[0]:.1f}, {self.goal[1]:.1f})  "

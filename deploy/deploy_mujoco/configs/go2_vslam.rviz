@@ -22,7 +22,7 @@ Visualization Manager:
       Name: VSLAM Occupancy Map
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /map
@@ -50,7 +50,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /go2/vslam/path
+        Value: /rtabmap/mapPath
     - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
@@ -71,6 +71,13 @@ Visualization Manager:
     - Class: rviz_default_plugins/Select
     - Class: rviz_default_plugins/FocusCamera
     - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
   Views:
     Current:
       Angle: -1.20

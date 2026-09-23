@@ -77,10 +77,53 @@ def check_home_narrow_passage():
     )
 
 
+def check_home_side_wall_escape():
+    """A turn beside one wall must step into open space instead of deadlocking."""
+    config = yaml.safe_load(
+        (ROOT / "deploy/deploy_mujoco/configs/go2_home.yaml").read_text()
+    )
+    model = mujoco.MjModel.from_xml_path(
+        str(ROOT / "resources/robots/go2/home_codex.xml")
+    )
+    data = mujoco.MjData(model)
+    data.qpos[:7] = [
+        -1.9701971452,
+        5.6800896052,
+        0.2825403203,
+        0.9999206884,
+        0.0000368758,
+        0.0122280103,
+        -0.0030151701,
+    ]
+    data.qpos[7:19] = config["default_angles"]
+    mujoco.mj_forward(model, data)
+    lidar = LidarHeightMap(model, data, config["lidar"])
+    lidar.scan()
+    navigator = TerrainNavigator(config["navigation"])
+    turn_right = np.array([0.0, 0.0, -1.2], dtype=np.float32)
+    command = navigator.update(turn_right, lidar, np.deg2rad(-0.3455))
+    assert navigator.state == "LATERAL_FOR_TURN", navigator.status_text()
+    assert command[0] == 0.0 and command[1] < 0.0 and command[2] == 0.0
+
+    # Moving right (negative body Y at this heading) opens the measured turn
+    # envelope; the original right-turn command must then resume.
+    data.qpos[1] -= 0.22
+    mujoco.mj_forward(model, data)
+    lidar.scan()
+    resumed = navigator.update(turn_right, lidar, np.deg2rad(-0.3455))
+    assert navigator.state == "FORWARD", navigator.status_text()
+    assert np.allclose(resumed, turn_right)
+    print(
+        "home side-wall escape: "
+        f"command={command.tolist()}, resumed={resumed.tolist()}"
+    )
+
+
 def main():
     check_scene("wall_avoidance_codex.xml", 0.25, "OBSTACLE")
     check_scene("cliff_avoidance_codex.xml", 0.45, "DROP")
     check_home_narrow_passage()
+    check_home_side_wall_escape()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 *.pt
+!deploy/pre_train/go2/high_level_nav.pt
 MUJOCO_LOG.TXT
 *.mp4
 videos
@@ -166,3 +167,11 @@ cython_debug/
 
 # logs
 logs
+
+# Generated RTAB-Map databases and exported navigation maps
+maps/
+
+# Locally generated navigation benchmark reports
+reports/navigation_benchmark_latest.json
+reports/navigation_benchmark_latest.md
+reports/stairs_benchmark_latest.txt

@@ -1,0 +1,44 @@
+# Deterministic furnished-home regression routes.  Coordinates are MuJoCo
+# world coordinates; every route uses the real Go2 body, LiDAR, high-level PPO
+# and low-level perceptive gait policy.
+contact_force_threshold: 5.0
+settle_time: 1.5
+stuck_window: 5.0
+stuck_distance: 0.05
+
+scenarios:
+  tv_console_pass:
+    description: "从客厅入口直行穿过电视柜前方"
+    start: [0.0, 0.0, 0.0]
+    goal: [2.7, 0.0]
+    timeout: 20.0
+    max_contact_episodes: 0
+    max_contact_force: 5.0
+    max_path_ratio: 2.2
+
+  armchair_narrow_passage:
+    description: "通过扶手椅与隔墙之间的真实窄通道"
+    start: [3.16, 2.35, 1.5707963268]
+    goal: [3.16, 4.25]
+    timeout: 24.0
+    max_contact_episodes: 0
+    max_contact_force: 5.0
+    max_path_ratio: 2.2
+
+  north_wall_corner_escape:
+    description: "靠近北墙起步，自主转向并离开墙角"
+    start: [-1.97, 5.55, 0.0]
+    goal: [-1.50, 4.00]
+    timeout: 24.0
+    max_contact_episodes: 0
+    max_contact_force: 5.0
+    max_path_ratio: 2.5
+
+  multiroom_bedroom:
+    description: "从起点绕过家具和隔墙进入卧室"
+    start: [0.0, 0.0, 0.0]
+    goal: [5.0, 3.0]
+    timeout: 45.0
+    max_contact_episodes: 0
+    max_contact_force: 5.0
+    max_path_ratio: 2.5

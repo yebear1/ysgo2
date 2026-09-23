@@ -88,6 +88,15 @@ def main():
     assert blocked_navigator.state == "FORWARD"
     assert released[0] == 0.8 and released[2] == 0.0
 
+    # PPO forward commands normally contain a steering correction.  The same
+    # clear corridor must release those moving-arc commands as well.
+    blocked_navigator.state = "BLOCKED"
+    curved_release = blocked_navigator.update(
+        np.array([0.45, -0.08, -0.33]), tight_clear, 0.0, autonomous=True
+    )
+    assert blocked_navigator.state == "FORWARD"
+    np.testing.assert_allclose(curved_release, [0.45, -0.08, -0.33])
+
     # Keep the lock when the forward corridor itself contains a real hazard.
     blocked_wall_navigator = TerrainNavigator(
         {"turning_radius": 0.43, "hazard_fraction": 0.15}
@@ -176,6 +185,7 @@ def main():
     print(f"avoidance_command={command.tolist()}")
     print(f"resume_command={resumed.tolist()}")
     print(f"blocked_clear_release={released.tolist()}")
+    print(f"blocked_curved_release={curved_release.tolist()}")
     print(f"blocked_wall_command={still_blocked.tolist()}")
     print(f"blocked_forward_arc={arc_command.tolist()}")
     print(f"corridor_centering={center_left.tolist()}")
