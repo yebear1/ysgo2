@@ -16,6 +16,10 @@
              width="400" height="400"/>
     <material name="home_floor" texture="home_floor_tex" texuniform="true" texrepeat="14 12" reflectance="0.04"/>
     <material name="wall" rgba="0.91 0.90 0.86 1"/>
+    <material name="art_blue" rgba="0.18 0.34 0.58 1"/>
+    <material name="art_ochre" rgba="0.72 0.43 0.15 1"/>
+    <material name="art_green" rgba="0.20 0.50 0.34 1"/>
+    <material name="art_red" rgba="0.64 0.23 0.20 1"/>
     <material name="wood" rgba="0.42 0.24 0.12 1"/>
     <material name="light_wood" rgba="0.68 0.48 0.27 1"/>
     <material name="sofa" rgba="0.18 0.36 0.52 1"/>
@@ -46,6 +50,17 @@
     <!-- Bedroom partition with a 1.2 m door opening. -->
     <geom name="partition_bed_west" type="box" group="1" pos="4.35 1.55 0.75" size="0.85 0.08 0.75" material="wall"/>
     <geom name="partition_bed_east" type="box" group="1" pos="8.60 1.55 0.75" size="2.40 0.08 0.75" material="wall"/>
+
+    <!-- Unique, visual-only wall art supplies the non-repeating corners a
+         real furnished home has.  Group 2 and disabled contacts keep both
+         LiDAR geometry and physical passage widths exactly unchanged. -->
+    <geom name="vslam_art_e1" type="box" group="2" pos="10.905 -4.10 0.82" size="0.012 0.34 0.26" material="art_blue" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_e2" type="box" group="2" pos="10.905 -2.65 0.68" size="0.012 0.22 0.38" material="art_ochre" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_e3" type="box" group="2" pos="10.905 -1.15 0.90" size="0.012 0.40 0.20" material="art_green" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_e4" type="box" group="2" pos="10.905 0.45 0.72" size="0.012 0.26 0.32" material="art_red" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_b1" type="box" group="2" pos="4.55 1.455 0.78" size="0.30 0.012 0.24" material="art_red" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_b2" type="box" group="2" pos="7.20 1.455 0.67" size="0.42 0.012 0.32" material="art_blue" contype="0" conaffinity="0"/>
+    <geom name="vslam_art_b3" type="box" group="2" pos="9.35 1.455 0.88" size="0.24 0.012 0.20" material="art_ochre" contype="0" conaffinity="0"/>
 
     <!-- Living room: rug, sofa, armchair, coffee table and TV unit. -->
     <geom name="living_rug" type="box" group="1" pos="0.3 2.35 0.012" size="1.75 1.35 0.012" material="rug" contype="0" conaffinity="0"/>

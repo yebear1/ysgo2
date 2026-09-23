@@ -175,3 +175,4 @@ maps/
 reports/navigation_benchmark_latest.json
 reports/navigation_benchmark_latest.md
 reports/stairs_benchmark_latest.txt
+reports/vslam_e2e/

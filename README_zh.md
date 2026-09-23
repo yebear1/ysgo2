@@ -106,6 +106,8 @@ Play 会导出 Actor 网络，保存于 `logs/{experiment_name}/exported/policie
 
 支持在 Mujoco 仿真器中运行 Sim2Sim：
 
+家庭环境的 RTAB-Map 建图、重启定位、回环导航和遮挡重定位回归见 [Go2 真 VSLAM 全链路导航回归](docs/VSLAM_E2E_REGRESSION.md)。
+
 ```bash
 python deploy/deploy_mujoco/deploy_go2.py
 ```

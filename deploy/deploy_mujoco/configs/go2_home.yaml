@@ -27,7 +27,9 @@ ros2_vslam:
   map_frame_id: "map"
   width: 640
   height: 360
-  publish_interval: 0.10
+  # 15 Hz keeps inter-frame rotation small enough for RGB-D odometry while
+  # remaining comfortably below the 500 Hz physics/control loop.
+  publish_interval: 0.0666667
   imu_publish_interval: 0.01
   min_depth: 0.12
   max_depth: 8.0

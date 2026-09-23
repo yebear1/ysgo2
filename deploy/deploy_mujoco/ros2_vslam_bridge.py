@@ -68,10 +68,12 @@ class Ros2VslamBridge:
         self.loop_closures = 0
         self._last_loop_closure_id = 0
         self._odometry_lost = True
+        self._imu_map_yaw_offset = None
         self._global_pose = None
         self._latest_map = None
         self._consumed_map_update = 0
         self._navigation_goal = None
+        self.camera_blocked = False
 
         if not rclpy.ok():
             rclpy.init(args=None)
@@ -362,8 +364,23 @@ class Ros2VslamBridge:
             return
         translation = transform.transform.translation
         rotation = transform.transform.rotation
+        visual_yaw = self._yaw_from_quaternion(rotation)
+        iw, ix, iy, iz = self._imu_orientation
+        imu_yaw = math.atan2(
+            2.0 * (iw * iz + ix * iy),
+            1.0 - 2.0 * (iy * iy + iz * iz),
+        )
+        if self._imu_map_yaw_offset is None:
+            self._imu_map_yaw_offset = math.atan2(
+                math.sin(visual_yaw - imu_yaw),
+                math.cos(visual_yaw - imu_yaw),
+            )
+        fused_yaw = math.atan2(
+            math.sin(imu_yaw + self._imu_map_yaw_offset),
+            math.cos(imu_yaw + self._imu_map_yaw_offset),
+        )
         self._global_pose = np.array(
-            [translation.x, translation.y, self._yaw_from_quaternion(rotation)],
+            [translation.x, translation.y, fused_yaw],
             dtype=np.float64,
         )
         if not self.tracking_mode.startswith("LOOP CLOSED"):
@@ -373,6 +390,18 @@ class Ros2VslamBridge:
     def global_pose(self):
         """Latest graph-optimized ``[x, y, yaw]`` pose, or ``None``."""
         return None if self._global_pose is None else self._global_pose.copy()
+
+    @property
+    def sensor_yaw(self):
+        """Gyro-integrated yaw, aligned to the map when alignment is known."""
+        iw, ix, iy, iz = self._imu_orientation
+        yaw = math.atan2(
+            2.0 * (iw * iz + ix * iy),
+            1.0 - 2.0 * (iy * iy + iz * iz),
+        )
+        if self._imu_map_yaw_offset is not None:
+            yaw += self._imu_map_yaw_offset
+        return math.atan2(math.sin(yaw), math.cos(yaw))
 
     def take_navigation_map(self):
         """Return each optimized occupancy-grid revision exactly once."""
@@ -412,6 +441,10 @@ class Ros2VslamBridge:
         depth = self.renderer.render().astype(np.float32, copy=True)
         self.renderer.disable_depth_rendering()
 
+        if self.camera_blocked:
+            rgb.fill(0)
+            depth.fill(0.0)
+
         # MuJoCo represents pixels that see the far clipping plane as a very
         # large metric depth (hundreds of metres), not as an invalid sample.
         # Feeding those values to RGB-D PnP makes distant/background features
@@ -437,6 +470,10 @@ class Ros2VslamBridge:
         )
         self.status_pub.publish(status)
 
+    def set_camera_blocked(self, blocked):
+        """Black out RGB-D frames for relocalization regression testing."""
+        self.camera_blocked = bool(blocked)
+
     def reset(self):
         # A simulator reset is deliberately not allowed to erase the external
         # RTAB-Map database. Reset only local visual odometry; the global graph
@@ -444,6 +481,7 @@ class Ros2VslamBridge:
         if self.reset_odom_client.service_is_ready():
             self.reset_odom_client.call_async(self._Empty.Request())
         self._global_pose = None
+        self._imu_map_yaw_offset = None
         self._odometry_lost = True
         self.tracking_mode = "WAITING FOR RELOCALIZATION"
         self.last_publish_time = -np.inf

@@ -9,6 +9,7 @@ from terrain_navigator import TerrainNavigator
 from goal_navigator import GoalNavigator
 from high_level_nav_policy import HighLevelNavigationPolicy
 from ros2_vslam_bridge import Ros2VslamBridge
+from vslam_e2e_benchmark import VslamE2EBenchmark
 
 import os
 import time
@@ -121,8 +122,8 @@ def get_xbox_command(joystick, max_cmd):
     return np.array([cmd_x, cmd_y, cmd_yaw], dtype=np.float32)
 
 
-def get_environment_contact(model, data):
-    """Return the strongest non-floor robot/environment contact for debugging."""
+def get_environment_contact_details(model, data):
+    """Return strongest non-floor robot/environment contact details."""
     strongest = None
     ignored_environment_geoms = {"floor", "living_rug"}
     for contact_index in range(data.ncon):
@@ -154,6 +155,12 @@ def get_environment_contact(model, data):
         if strongest is None or force > strongest[0]:
             strongest = (force, robot_name, environment_name)
 
+    return strongest
+
+
+def get_environment_contact(model, data):
+    """Return the strongest non-floor robot/environment contact for debugging."""
+    strongest = get_environment_contact_details(model, data)
     if strongest is None:
         return "Contact: none"
     force, robot_name, environment_name = strongest
@@ -201,6 +208,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Publish the simulated front RGB-D camera for RTAB-Map.",
     )
+    parser.add_argument(
+        "--vslam-benchmark-phase", choices=("mapping", "localization")
+    )
+    parser.add_argument("--vslam-benchmark-config")
+    parser.add_argument("--vslam-benchmark-output")
     args = parser.parse_args()
     save_video = args.save_video
     visualize_moe_weights = args.visualize_moe_weights
@@ -335,6 +347,19 @@ if __name__ == "__main__":
     ros2_vslam = None
     if ros2_vslam_config.get("enabled", False):
         ros2_vslam = Ros2VslamBridge(m, d, ros2_vslam_config)
+    vslam_benchmark = None
+    if args.vslam_benchmark_phase:
+        if ros2_vslam is None:
+            raise RuntimeError("VSLAM benchmark requires --ros2-vslam")
+        if not args.vslam_benchmark_config or not args.vslam_benchmark_output:
+            raise RuntimeError(
+                "VSLAM benchmark requires config and output paths"
+            )
+        vslam_benchmark = VslamE2EBenchmark(
+            args.vslam_benchmark_config,
+            args.vslam_benchmark_phase,
+            args.vslam_benchmark_output,
+        )
     pending_goal_name = None
     pending_goal_coordinates = args.goal if ros2_vslam is not None else None
     
@@ -430,6 +455,13 @@ if __name__ == "__main__":
                     pending_goal_name = None
             show_str = f"Speed: Vx={local_vel[0]:.2f}, Vy={local_vel[1]:.2f}, Wz={local_ang_vel[2]:.2f}, "
             if counter % control_decimation == 0:
+                if vslam_benchmark is not None:
+                    vslam_benchmark.update_control(
+                        global_pose, goal_navigator, d.time
+                    )
+                    if vslam_benchmark.consume_waypoint_change():
+                        navigator.reset()
+                        high_level_navigator.reset()
                 if keyboard.goal_cancel_requested:
                     goal_navigator.cancel()
                     keyboard.goal_cancel_requested = False
@@ -454,8 +486,48 @@ if __name__ == "__main__":
                         )
                         pending_goal_name = None
 
-                goal_control = goal_navigator.active
-                if goal_control:
+                benchmark_direct = (
+                    vslam_benchmark is not None
+                    and vslam_benchmark.direct_target is not None
+                )
+                benchmark_heading = (
+                    vslam_benchmark.heading_command(global_pose)
+                    if vslam_benchmark is not None else None
+                )
+                benchmark_recovery = (
+                    vslam_benchmark.recovery_command(navigator.state, d.time)
+                    if vslam_benchmark is not None else None
+                )
+                benchmark_tracking_recovery = (
+                    vslam_benchmark.tracking_recovery_command(global_pose, d.time)
+                    if vslam_benchmark is not None else None
+                )
+                goal_control = goal_navigator.active or benchmark_direct or (
+                    benchmark_heading is not None
+                )
+                if benchmark_tracking_recovery is not None:
+                    goal_control = False
+                    manual_cmd = benchmark_tracking_recovery
+                elif benchmark_recovery is not None:
+                    navigator.reset()
+                    goal_control = False
+                    manual_cmd = benchmark_recovery
+                elif benchmark_heading is not None:
+                    manual_cmd = benchmark_heading
+                elif benchmark_direct:
+                    if global_pose is None:
+                        manual_cmd = np.zeros(3, dtype=np.float32)
+                    else:
+                        manual_cmd = high_level_navigator.command(
+                            vslam_benchmark.direct_target,
+                            global_pose[:2], global_pose[2],
+                            np.array(
+                                [local_vel[0], local_vel[1], local_ang_vel[2]],
+                                dtype=np.float32,
+                            ),
+                            lidar,
+                        )
+                elif goal_control:
                     if global_pose is None:
                         # Do not dead-reckon a global route from MuJoCo truth if
                         # visual tracking is temporarily lost.
@@ -492,7 +564,11 @@ if __name__ == "__main__":
                 navigation_yaw = (
                     float(global_pose[2])
                     if global_pose is not None
-                    else get_yaw(d.qpos[3:7])
+                    else (
+                        ros2_vslam.sensor_yaw
+                        if ros2_vslam is not None
+                        else get_yaw(d.qpos[3:7])
+                    )
                 )
                 cmd = navigator.update(
                     manual_cmd,
@@ -504,6 +580,26 @@ if __name__ == "__main__":
                         goal_navigator.last_distance if goal_control else None
                     ),
                 )
+                if vslam_benchmark is not None:
+                    # Keep inter-frame image motion inside the RGB-D visual
+                    # odometry capture range.  This is a sensor constraint,
+                    # not a truth-pose correction.
+                    speed_limits = vslam_benchmark.phase_config
+                    cmd[0] = np.clip(
+                        cmd[0],
+                        -float(speed_limits.get("max_reverse_speed", 0.30)),
+                        float(speed_limits.get("max_linear_speed", 0.65)),
+                    )
+                    cmd[1] = np.clip(
+                        cmd[1],
+                        -float(speed_limits.get("max_lateral_speed", 0.25)),
+                        float(speed_limits.get("max_lateral_speed", 0.25)),
+                    )
+                    cmd[2] = np.clip(
+                        cmd[2],
+                        -float(speed_limits.get("max_yaw_rate", 0.45)),
+                        float(speed_limits.get("max_yaw_rate", 0.45)),
+                    )
                 if np.linalg.norm(cmd) < 1e-4:
                     stationary_updates += 1
                     if stationary_updates >= hold_settle_updates and not hold_active:
@@ -546,7 +642,21 @@ if __name__ == "__main__":
             if lidar is not None and counter % lidar_scan_steps == 0:
                 lidar.scan()
             if ros2_vslam is not None:
+                if vslam_benchmark is not None:
+                    ros2_vslam.set_camera_blocked(vslam_benchmark.camera_blocked)
                 ros2_vslam.update(d.time)
+            if vslam_benchmark is not None:
+                truth_pose = np.array(
+                    [d.qpos[0], d.qpos[1], get_yaw(d.qpos[3:7])],
+                    dtype=np.float64,
+                )
+                vslam_benchmark.observe(
+                    d.time,
+                    truth_pose,
+                    ros2_vslam.global_pose,
+                    get_environment_contact_details(m, d),
+                    ros2_vslam,
+                )
 
             if save_video and counter % frame_skip == 0:
                 try:
@@ -669,6 +779,8 @@ if __name__ == "__main__":
                 wall_elapsed = time.perf_counter() - wall_clock_start
                 if wall_elapsed > 1.0e-6:
                     realtime_factor = simulated_elapsed / wall_elapsed
+            if vslam_benchmark is not None and vslam_benchmark.finished:
+                break
 
     # writer.close()
     if save_video:
@@ -679,4 +791,14 @@ if __name__ == "__main__":
         np.save(latent_path, all_latents)
         print(f"Latent vectors saved successfully to {latent_path}")
     if ros2_vslam is not None:
+        if vslam_benchmark is not None:
+            vslam_benchmark.write_result(ros2_vslam)
+            # Destroying both the passive GLFW viewer and an off-screen
+            # MuJoCo renderer can deadlock in some Mesa driver versions after
+            # a long run.  The benchmark is a dedicated child process: once
+            # its result is durable, let the launcher trap stop RTAB-Map and
+            # save the database instead of risking an indefinite teardown.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
         ros2_vslam.close()

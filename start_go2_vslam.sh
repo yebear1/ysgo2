@@ -11,6 +11,7 @@ mode="mapping"
 new_map=0
 database="$PWD/maps/go2_home.rtabmap.db"
 sim_args=()
+use_rviz=1
 for argument in "$@"; do
   case "$argument" in
     --localization)
@@ -21,6 +22,9 @@ for argument in "$@"; do
       ;;
     --database=*)
       database="${argument#--database=}"
+      ;;
+    --no-rviz)
+      use_rviz=0
       ;;
     *)
       sim_args+=("$argument")
@@ -91,17 +95,21 @@ $memory_args"
 # These parameters belong only to the visual-odometry node. Passing them in
 # the common RTAB-Map arguments makes the SLAM node reject undeclared Odom/*
 # parameters on ROS 2 Jazzy.
-odom_args="--Odom/ResetCountdown 3 \
---Odom/Strategy 1 \
---Odom/VisKeyFrameThr 15 \
+# Do not silently re-origin odometry after a few bad frames.  The benchmark
+# actively scans for the previous local map; if that fails it reports a loss
+# instead of continuing in a shifted coordinate frame.
+odom_args="--Odom/ResetCountdown 0 \
+--Odom/Strategy 0 \
+--Odom/VisKeyFrameThr 80 \
 --Odom/GuessMotion false \
---Vis/CorType 1 \
+--Vis/CorType 0 \
 --Vis/BundleAdjustment 0 \
 --Vis/FeatureType 8 \
---OdomF2M/BundleAdjustment 0"
+--OdomF2M/BundleAdjustment 0 \
+--OdomF2M/MaxSize 3000"
 
 rtabmap_log="$PWD/logs/rtabmap.log"
-ros2 launch rtabmap_launch rtabmap.launch.py \
+setsid ros2 launch rtabmap_launch rtabmap.launch.py \
   namespace:=rtabmap \
   database_path:="$database" \
   localization:="$localization" \
@@ -129,14 +137,42 @@ ros2 launch rtabmap_launch rtabmap.launch.py \
   >"$rtabmap_log" 2>&1 &
 rtabmap_pid=$!
 
-rviz2 -d deploy/deploy_mujoco/configs/go2_vslam.rviz &
-rviz_pid=$!
+rviz_pid=""
+if [[ "$use_rviz" == 1 ]]; then
+  rviz2 -d deploy/deploy_mujoco/configs/go2_vslam.rviz &
+  rviz_pid=$!
+fi
 
 cleanup() {
-  kill -INT "$rtabmap_pid" 2>/dev/null || true
-  kill "$rviz_pid" 2>/dev/null || true
+  kill -INT -- "-$rtabmap_pid" 2>/dev/null || true
+  if [[ -n "$rviz_pid" ]]; then
+    kill "$rviz_pid" 2>/dev/null || true
+  fi
+  # ros2 launch can wait forever when an RTAB-Map worker is stuck saving or
+  # shutting down.  Give the process group time to flush the database, then
+  # escalate so benchmark runs cannot leave publishers behind.
+  for _ in {1..20}; do
+    if ! kill -0 "$rtabmap_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
+  if kill -0 "$rtabmap_pid" 2>/dev/null; then
+    kill -TERM -- "-$rtabmap_pid" 2>/dev/null || true
+    for _ in {1..10}; do
+      if ! kill -0 "$rtabmap_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.5
+    done
+  fi
+  if kill -0 "$rtabmap_pid" 2>/dev/null; then
+    kill -KILL -- "-$rtabmap_pid" 2>/dev/null || true
+  fi
   wait "$rtabmap_pid" 2>/dev/null || true
-  wait "$rviz_pid" 2>/dev/null || true
+  if [[ -n "$rviz_pid" ]]; then
+    wait "$rviz_pid" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
