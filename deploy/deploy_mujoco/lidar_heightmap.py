@@ -43,6 +43,11 @@ class LidarHeightMap:
         self._last_base_pos = np.zeros(3, dtype=np.float64)
         self._last_yaw = 0.0
         self.planar_max_range = float(config.get("planar_max_range", 2.0))
+        self.planar_scan_heights = tuple(
+            float(height) for height in config.get("planar_scan_heights", [0.32])
+        )
+        if not self.planar_scan_heights or min(self.planar_scan_heights) <= 0:
+            raise ValueError("planar_scan_heights must contain positive heights")
         self.planar_angles = np.linspace(-np.pi, np.pi, 72, endpoint=False)
         self.planar_ranges = np.full(
             self.planar_angles.shape, self.planar_max_range, dtype=np.float32
@@ -146,27 +151,21 @@ class LidarHeightMap:
         """Measure walls and furniture around the complete turning envelope."""
         geomid = np.array([-1], dtype=np.int32)
         origin = np.asarray(base_pos, dtype=np.float64).copy()
-        origin[2] = max(self.baseline + 0.32, 0.32)
         for index, angle in enumerate(self.planar_angles):
             world_angle = yaw + float(angle)
             direction = np.array(
                 [np.cos(world_angle), np.sin(world_angle), 0.0], dtype=np.float64
             )
-            distance = mujoco.mj_ray(
-                self.model,
-                self.data,
-                origin,
-                direction,
-                self.geomgroup,
-                True,
-                -1,
-                geomid,
-            )
-            self.planar_ranges[index] = (
-                min(float(distance), self.planar_max_range)
-                if distance >= 0.0
-                else self.planar_max_range
-            )
+            nearest = self.planar_max_range
+            for height in self.planar_scan_heights:
+                origin[2] = self.baseline + height
+                distance = mujoco.mj_ray(
+                    self.model, self.data, origin, direction,
+                    self.geomgroup, True, -1, geomid,
+                )
+                if distance >= 0.0:
+                    nearest = min(nearest, float(distance))
+            self.planar_ranges[index] = nearest
 
     def planar_clearance(self, center_angle=0.0, half_angle=np.pi):
         difference = np.arctan2(

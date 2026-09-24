@@ -4,6 +4,12 @@ set -eo pipefail
 cd "$(dirname "$0")"
 source /opt/ros/jazzy/setup.bash
 set -u
+# Protect direct launches too (the end-to-end wrapper has its own lock).
+exec 8>"${XDG_RUNTIME_DIR:-/tmp}/go2_vslam_ros_${UID}_${ROS_DOMAIN_ID:-0}.lock"
+if ! flock -n 8; then
+  echo "A Go2 VSLAM instance already owns ROS domain ${ROS_DOMAIN_ID:-0}." >&2
+  exit 3
+fi
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
@@ -55,17 +61,23 @@ if [[ "$mode" == "localization" ]]; then
   memory_args="--Mem/IncrementalMemory false \
 --Mem/InitWMWithAllNodes true \
 --Mem/LocalizationReadOnly true \
+--RGBD/LocalizationPriorError 0.03 \
+--RGBD/ProximityMaxPaths 1 \
 --RGBD/StartAtOrigin true"
 fi
 
-rtabmap_args="--Reg/Force3DoF true \
+rtabmap_args="--Reg/Force3DoF false \
+--Optimizer/GravitySigma 0.05 \
+--Optimizer/Robust true \
 --RGBD/CreateOccupancyGrid true \
 --RGBD/OptimizeFromGraphEnd false \
 --RGBD/OptimizeMaxError 3.0 \
 --RGBD/ProximityBySpace true \
---RGBD/ProximityByTime true \
+--RGBD/ProximityByTime false \
 --RGBD/LocalRadius 4.0 \
---Vis/MinInliers 6 \
+--Vis/MinInliers 15 \
+--Vis/EstimationType 0 \
+--Vis/InlierDistance 0.04 \
 --Vis/MaxDepth 8.0 \
 --Vis/MaxFeatures 2000 \
 --Vis/FeatureType 1 \
@@ -77,19 +89,23 @@ rtabmap_args="--Reg/Force3DoF true \
 --RGBD/LoopClosureReextractFeatures true \
 --RGBD/LinearUpdate 0.08 \
 --RGBD/AngularUpdate 0.08 \
---Grid/FromDepth true \
+--Grid/Sensor 1 \
 --Grid/3D false \
 --Grid/CellSize 0.05 \
 --Grid/RangeMax 5.0 \
 --Grid/DepthDecimation 1 \
 --Grid/RayTracing true \
---Grid/NormalsSegmentation false \
+--Grid/NormalsSegmentation true \
+--Grid/MapFrameProjection false \
+--Grid/MaxGroundAngle 20 \
+--Grid/NormalK 10 \
+--Grid/FlatObstacleDetected false \
+--Grid/MinClusterSize 3 \
 --Grid/NoiseFilteringRadius 0.10 \
 --Grid/NoiseFilteringMinNeighbors 2 \
---Grid/MinObstacleHeight -0.18 \
 --Grid/MaxObstacleHeight 1.50 \
---Grid/MaxGroundHeight -0.18 \
---Grid/MinGroundHeight -0.40 \
+--Grid/MaxGroundHeight 0 \
+--Grid/MinGroundHeight 0 \
 $memory_args"
 
 # These parameters belong only to the visual-odometry node. Passing them in
@@ -98,18 +114,22 @@ $memory_args"
 # Do not silently re-origin odometry after a few bad frames.  The benchmark
 # actively scans for the previous local map; if that fails it reports a loss
 # instead of continuing in a shifted coordinate frame.
-odom_args="--Odom/ResetCountdown 0 \
+odom_args="--Reg/Force3DoF false \
+--Odom/ResetCountdown 0 \
 --Odom/Strategy 0 \
 --Odom/VisKeyFrameThr 80 \
 --Odom/GuessMotion false \
 --Vis/CorType 0 \
+--Vis/MinInliers 15 \
+--Vis/PnPMaxVariance 0.02 \
 --Vis/BundleAdjustment 0 \
 --Vis/FeatureType 8 \
---OdomF2M/BundleAdjustment 0 \
+--OdomF2M/BundleAdjustment 1 \
 --OdomF2M/MaxSize 3000"
 
-rtabmap_log="$PWD/logs/rtabmap.log"
+rtabmap_log="${GO2_RTABMAP_LOG:-$PWD/logs/rtabmap.log}"
 setsid ros2 launch rtabmap_launch rtabmap.launch.py \
+  use_sim_time:=true \
   namespace:=rtabmap \
   database_path:="$database" \
   localization:="$localization" \
@@ -120,10 +140,14 @@ setsid ros2 launch rtabmap_launch rtabmap.launch.py \
   publish_tf_odom:=true \
   publish_tf_map:=true \
   visual_odometry:=true \
-  rgbd_sync:=true \
+  rgbd_sync:=false \
+  subscribe_rgbd:=true \
+  depth:=false \
+  rgbd_topic:=/go2/camera/rgbd_image \
   approx_rgbd_sync:=false \
   approx_sync:=false \
-  qos:=2 \
+  qos:=1 \
+  qos_imu:=2 \
   rgb_topic:=/go2/camera/color/image_raw \
   depth_topic:=/go2/camera/depth/image_raw \
   camera_info_topic:=/go2/camera/color/camera_info \
@@ -139,7 +163,7 @@ rtabmap_pid=$!
 
 rviz_pid=""
 if [[ "$use_rviz" == 1 ]]; then
-  rviz2 -d deploy/deploy_mujoco/configs/go2_vslam.rviz &
+  rviz2 -d deploy/deploy_mujoco/configs/go2_vslam.rviz --ros-args -p use_sim_time:=true &
   rviz_pid=$!
 fi
 

@@ -13,7 +13,9 @@ mapping:
   max_reverse_speed: 0.30
   max_lateral_speed: 0.25
   max_yaw_rate: 0.45
-  waypoint_tolerance: 0.40
+  # Smaller than half the separation of doorway waypoints, so entering the
+  # door cannot also count as leaving it before the robot has cleared it.
+  waypoint_tolerance: 0.18
   # Fail a stalled exploration waypoint instead of allowing an unstable pose
   # to make the suite spin until the much longer whole-phase timeout.
   waypoint_progress_step: 0.15
@@ -27,11 +29,11 @@ mapping:
     - [5.6, 0.6]
     # Align with, cross and clear the 1 m bedroom doorway before turning.
     - [5.7, 1.25]
-    - [5.7, 1.95]
+    - [5.6, 2.30]
     - [5.7, 1.25]
     - [5.6, 0.6]
     - [8.8, 0.0]
-    - [8.8, -1.2]
+    - [8.3, -1.1]
     - [8.8, 0.0]
     - [3.0, 0.0]
     - [0.0, 0.0]
@@ -41,6 +43,8 @@ mapping:
 
 localization:
   timeout: 150.0
+  # Leave margin for estimation error inside the 0.25 m physical criterion.
+  goal_tolerance: 0.15
   initial_tracking_grace: 8.0
   initial_tracking_timeout: 20.0
   tracking_scan_delay: 0.3

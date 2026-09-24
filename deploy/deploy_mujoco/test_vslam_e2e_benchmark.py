@@ -3,6 +3,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import yaml
@@ -86,12 +87,67 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         benchmark = make_benchmark(tmpdir)
+        pose = np.zeros(3)
+        benchmark.tracking_recovery_command(pose, 0.0, sensor_yaw=0.0)
+        benchmark.tracking_recovery_command(None, 0.1, sensor_yaw=0.2)
+        command = benchmark.tracking_recovery_command(None, 0.4, sensor_yaw=0.3)
+        # Return toward the last valid view instead of rotating farther away.
+        assert command[2] < 0.0
+        lidar = SimpleNamespace(
+            planar_clearance=lambda *args: 0.4,
+            translation_clearance=lambda *args, **kwargs: 0.5,
+        )
+        command = benchmark.tracking_recovery_command(None, 0.5, 0.3, lidar)
+        assert command[0] < 0.0 and command[2] == 0.0
+        lidar.translation_clearance = lambda *args, **kwargs: 0.1
+        command = benchmark.tracking_recovery_command(None, 0.6, 0.3, lidar)
+        assert command[0] == 0.0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = make_benchmark(tmpdir)
         pose = np.array([0.0, 0.0, 0.0])
         benchmark.observe(0.0, pose, pose, None, BridgeStub())
         benchmark.observe(1.0, pose, None, None, BridgeStub())
         benchmark.observe(4.5, pose, None, None, BridgeStub())
         result = benchmark.result(BridgeStub())
         assert result["longest_tracking_loss_s"] == 3.5
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = make_benchmark(tmpdir)
+        pose = np.zeros(3)
+        control = {"command": [0.2, 0.0, 0.1], "navigation_state": "FORWARD"}
+        for time, force in enumerate([4.9, 6.0, 8.0, 0.0, 7.0]):
+            benchmark.observe(time, pose, pose, (force, "foot", "toy"), BridgeStub(), control)
+        result = benchmark.result(BridgeStub())
+        assert result["contact_episodes"] == 2
+        assert len(result["contact_events"]) == 2
+        assert result["contact_events"][0]["simulation_time"] == 1
+        assert result["contact_events"][0]["control"] == control
+        assert result["max_contact_force_n"] == 8.0
+
+    # Reaching the bedroom doorway must not also mark the outward waypoint
+    # reached. The old 0.40 m circles overlapped, initiating a pivot in the door.
+    config_path = Path(__file__).parent / "configs/vslam_e2e_benchmark.yaml"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "mapping", Path(tmpdir) / "x.json")
+        benchmark._mapping_index = 3
+        benchmark.update_control(np.array([5.7, 1.58, 1.57]), None, 1.0)
+        assert benchmark._mapping_index == 3
+        assert benchmark.direct_target[1] > 2.0
+        benchmark.update_control(np.array([5.6, 2.3, 1.57]), None, 2.0)
+        assert benchmark._mapping_index == 4
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        navigator = SimpleNamespace(map_ready=False)
+        pose = np.zeros(3)
+        benchmark.update_control(pose, navigator, 0.0)
+        assert not benchmark.finished
+        navigator.map_ready = True
+        benchmark.update_control(pose, navigator, 1.0)
+        assert not benchmark.finished  # A grid alone is not relocalization.
+        benchmark.update_control(pose, navigator, 21.0)
+        assert benchmark.failed_reason == "saved-map localization or occupancy grid unavailable"
 
     source = Path(__file__).with_name("vslam_e2e_benchmark.py").read_text()
     control_source = source[

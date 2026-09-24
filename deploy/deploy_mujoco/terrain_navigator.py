@@ -20,6 +20,7 @@ class TerrainNavigator:
     def __init__(self, config):
         self.enabled = bool(config.get("enabled", True))
         self.max_step_up = float(config.get("max_step_up", 0.18))
+        self.planar_obstacle_check = bool(config.get("planar_obstacle_check", False))
         self.max_drop = float(config.get("max_drop", 0.15))
         self.lookahead_min = float(config.get("lookahead_min", 0.25))
         self.lookahead_max = float(config.get("lookahead_max", 1.00))
@@ -264,6 +265,25 @@ class TerrainNavigator:
             previous_valid = valid
         return "CLEAR", math.inf
 
+    def _planar_obstacle_distance(self, lidar, angle, half_width, max_distance):
+        """Use actual range endpoints, not just sparse elevation cell centres.
+
+        Enabled only for flat, zero-contact navigation: ordinary stair walking
+        must still classify a low return by its traversable elevation.
+        """
+        if not self.planar_obstacle_check:
+            return math.inf
+        relative = lidar.planar_angles - float(angle)
+        x = lidar.planar_ranges * np.cos(relative)
+        y = lidar.planar_ranges * np.sin(relative)
+        selected = (
+            np.isfinite(lidar.planar_ranges)
+            & (lidar.planar_ranges < lidar.planar_max_range - 1e-3)
+            & (x > 0.0) & (x <= max_distance)
+            & (np.abs(y) <= half_width)
+        )
+        return float(np.min(x[selected])) if np.any(selected) else math.inf
+
     def analyze(self, lidar, side=0):
         x_mask = (lidar.x_values >= self.lookahead_min) & (
             lidar.x_values <= self.lookahead_max
@@ -278,7 +298,7 @@ class TerrainNavigator:
             )
         else:
             y_mask = np.abs(lidar.y_values) <= self.corridor_half_width
-        return self._corridor_hazard(
+        result = self._corridor_hazard(
             lidar.elevation,
             lidar.x_values,
             lidar.y_values,
@@ -289,6 +309,13 @@ class TerrainNavigator:
             self.hazard_fraction,
             self.drop_fraction,
         )
+        if side == 0:
+            distance = self._planar_obstacle_distance(
+                lidar, 0.0, self.corridor_half_width, self.lookahead_max
+            )
+            if distance < result[1]:
+                return "OBSTACLE", distance
+        return result
 
     def _candidate_result(self, lidar, angle):
         x_values = lidar.x_values[
@@ -313,6 +340,12 @@ class TerrainNavigator:
             self.hazard_fraction,
             self.drop_fraction,
         )
+        planar_distance = self._planar_obstacle_distance(
+            lidar, angle, self.corridor_half_width + self.planning_clearance,
+            self.planning_lookahead,
+        )
+        if hazard == "CLEAR" and math.isfinite(planar_distance):
+            hazard = "OBSTACLE"
         missing = np.mean(~np.isfinite(patch))
         values = np.nan_to_num(patch, nan=0.0)
         jumps = np.diff(np.vstack((np.zeros((1, values.shape[1])), values)), axis=0)
@@ -402,7 +435,84 @@ class TerrainNavigator:
             lateral_velocity,
         )
 
+    def _swept_motion_clear(self, command, lidar, horizon=0.75):
+        """Check a constant body twist against measured endpoints, front AND rear.
+
+        This is a rectangular robot footprint, not enlarged obstacle geometry.
+        If a return is already inside it, permit only motion that reduces the
+        overlap; otherwise a safe translation out could be permanently locked.
+        """
+        ranges = np.asarray(lidar.planar_ranges)
+        valid = np.isfinite(ranges) & (ranges < lidar.planar_max_range - 1e-3)
+        if not np.any(valid):
+            return True
+        angles = np.asarray(lidar.planar_angles)[valid]
+        points = ranges[valid, None] * np.column_stack((np.cos(angles), np.sin(angles)))
+        extent = np.array([self.body_half_length, self.corridor_half_width])
+        initial = np.max(np.abs(points) - extent, axis=1)
+        minimum = np.minimum(initial, 0.0)
+        vx, vy, wz = map(float, command)
+        for time in np.linspace(0.05, horizon, 15):
+            angle = wz * time
+            c, s = math.cos(angle), math.sin(angle)
+            if abs(wz) < 1e-6:
+                translation = np.array([vx * time, vy * time])
+            else:
+                translation = np.array([
+                    (vx * s - vy * (1.0 - c)) / wz,
+                    (vx * (1.0 - c) + vy * s) / wz,
+                ])
+            local = (points - translation) @ np.array([[c, -s], [s, c]])
+            clearance = np.max(np.abs(local) - extent, axis=1)
+            if np.any(clearance < minimum - 1e-5):
+                return False
+        return True
+
+    def _guard_swept_motion(self, command, lidar):
+        command = np.asarray(command, dtype=np.float32)
+        if (
+            not self.planar_obstacle_check
+            or np.linalg.norm(command) < 1e-4
+            or self._swept_motion_clear(command, lidar)
+        ):
+            return command
+        vx, vy, wz = map(float, command)
+        candidates = [
+            [vx, vy, 0.0], [vx, vy, 0.5 * wz],
+            [0.20, 0.0, 0.0], [-0.15, 0.0, 0.0],
+            [0.0, 0.15, 0.0], [0.0, -0.15, 0.0],
+        ]
+        safe = []
+        for candidate in candidates:
+            # Removing yaw from a pure pivot produces zero. Do not let this
+            # cheapest but motionless candidate beat a measured safe escape.
+            if np.linalg.norm(candidate) < 1e-4:
+                continue
+            # Recovery translations must still respect the existing height
+            # and drop checks. Reverse/side space comes from measured ranges.
+            if candidate[0] > 0 and self.analyze(lidar)[0] == "DROP":
+                continue
+            if self._swept_motion_clear(candidate, lidar):
+                cost = float(np.sum((np.asarray(candidate) - command) ** 2))
+                safe.append((cost, candidate))
+        self.reset()
+        self.hazard = "MOTION_SWEEP"
+        if safe:
+            return np.asarray(min(safe, key=lambda item: item[0])[1], dtype=np.float32)
+        return np.zeros(3, dtype=np.float32)
+
     def update(
+        self, manual_command, lidar, yaw, autonomous=False,
+        goal_distance=None, lateral_velocity=0.0,
+    ):
+        command = self._update(
+            manual_command, lidar, yaw, autonomous, goal_distance, lateral_velocity
+        )
+        if not self.enabled or lidar is None:
+            return command
+        return self._guard_swept_motion(command, lidar)
+
+    def _update(
         self,
         manual_command,
         lidar,
@@ -534,7 +644,14 @@ class TerrainNavigator:
             if lidar.planar_clearance() >= self.turning_radius:
                 self.reset()
                 return command
-            return np.zeros(3, dtype=np.float32)
+            if abs(command[2]) > 1.0e-3 and command[0] <= 0.0:
+                # A new pivot may have a safe escape translation even though
+                # the full rotational sweep is still obstructed. Re-enter
+                # the measured-clearance recovery selector below; keeping
+                # BLOCKED here forever prevented leaving a reached goal.
+                self.reset()
+            else:
+                return np.zeros(3, dtype=np.float32)
 
         # A point-foot path can look clear while a 0.72 m long quadruped clips
         # a wall with a rear thigh during an in-place turn. Protect both manual

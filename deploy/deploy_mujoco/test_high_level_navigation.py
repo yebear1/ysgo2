@@ -79,6 +79,22 @@ def main():
     policy.reset()
     assert not policy.reorienting
     np.testing.assert_array_equal(policy.previous_command, [0, 0, 0])
+    # Final approach must converge even when the target is behind the body;
+    # it must not start another yaw orbit around a sub-40 cm goal.
+    for yaw in (0.0, 1.3, -2.5):
+        position = np.array([0.27, -0.08])
+        for _ in range(100):
+            approaching = policy.command([0, 0], position, yaw, [0, 0, 0], FakeLidar())
+            assert approaching[2] == 0.0
+            assert np.max(np.abs(approaching[:2])) <= 0.201
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            velocity = np.array([[cy, -sy], [sy, cy]]) @ approaching[:2]
+            assert np.dot(velocity, -position) > 0.0
+            position += 0.05 * velocity
+        assert np.linalg.norm(position) < 0.01
+    np.testing.assert_array_equal(
+        policy.command([0, 0], [0, 0], 0, [0, 0, 0], FakeLidar()), [0, 0, 0]
+    )
     print(f"high-level navigation checks passed: command={command}")
 
 

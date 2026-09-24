@@ -43,6 +43,7 @@ class VslamE2EBenchmark:
         self.pose_errors = []
         self.yaw_errors = []
         self.contact_episodes = 0
+        self.contact_events = []
         self.max_contact_force = 0.0
         self.strongest_contact = None
         self._contact_active = False
@@ -77,7 +78,11 @@ class VslamE2EBenchmark:
         self._initial_pose_seen = False
         self.tracking_scan_actions = 0
         self._tracking_scan_active = False
+        self._last_tracking_yaw = None
         self._last_diagnostic_time = None
+        self._last_trace_time = -math.inf
+        self.trace = []
+        self._mapping_route_attempt_time = -math.inf
 
     def _elapsed(self, simulation_time):
         self.last_time = float(simulation_time)
@@ -153,19 +158,33 @@ class VslamE2EBenchmark:
                     self.finished = True
                     return
                 if distance > tolerance:
-                    self.direct_target = target
+                    self.direct_target = self._exploration_target(
+                        target, global_pose, goal_navigator, simulation_time
+                    )
                     return
                 print(
                     f"VSLAM mapping waypoint {self._mapping_index + 1}/"
                     f"{len(waypoints)} reached"
                 )
                 self._mapping_index += 1
+                if goal_navigator is not None:
+                    goal_navigator.cancel()
                 self._mapping_progress_index = None
                 self._mapping_best_distance = math.inf
                 self._mapping_last_progress_time = None
                 self._waypoint_changed = True
             self.direct_target = None
             self.finished = True
+            return
+
+        # A TF tree may be available before the saved grid has arrived or
+        # before RTAB-Map has matched a frame against the saved database.
+        # Neither state is yet sufficient to plan in the persistent map.
+        if not goal_navigator.map_ready or self.loop_closures == 0:
+            self.direct_target = None
+            if elapsed > float(self.phase_config.get("initial_tracking_timeout", 20.0)):
+                self.failed_reason = "saved-map localization or occupancy grid unavailable"
+                self.finished = True
             return
 
         goals = self.phase_config["goals"]
@@ -214,6 +233,35 @@ class VslamE2EBenchmark:
             goal_navigator.cancel()
             self._last_goal_reached = False
 
+    def _exploration_target(self, target, pose, navigator, simulation_time):
+        """Use observed free-space routes when returning through mapped rooms.
+
+        Unobserved exploration goals still use the local sensor controller.
+        Once the map contains a goal, a straight ray through furniture is not
+        a valid return route: follow the existing grid planner's waypoints.
+        """
+        if navigator is None or not navigator.map_ready:
+            return target
+        if navigator.active:
+            navigator.update(pose[:2], pose[2], simulation_time)
+            if navigator.active:
+                return navigator.path[min(navigator.waypoint_index, len(navigator.path) - 1)]
+            return target
+        if float(simulation_time) - self._mapping_route_attempt_time < 1.0:
+            return target
+        if not navigator._world_in_bounds(target) or not navigator._world_in_bounds(pose[:2]):
+            return target
+        start_cell = navigator._world_to_grid(pose[:2])
+        goal_cell = navigator._world_to_grid(target)
+        if not navigator.known[goal_cell] or navigator.occupied[goal_cell]:
+            return target
+        if navigator._line_clear(start_cell, goal_cell):
+            return target
+        self._mapping_route_attempt_time = float(simulation_time)
+        if navigator.set_goal(target, pose[:2], simulation_time, "mapping_return"):
+            return navigator.path[min(navigator.waypoint_index, len(navigator.path) - 1)]
+        return target
+
     def consume_waypoint_change(self):
         """Return a one-shot signal for resetting local reactive state."""
         changed = self._waypoint_changed
@@ -243,11 +291,11 @@ class VslamE2EBenchmark:
             self._blocked_since = None
         return None
 
-    def tracking_recovery_command(self, global_pose, simulation_time):
+    def tracking_recovery_command(self, global_pose, simulation_time, sensor_yaw=None, lidar=None):
         """Actively search for visual features after tracking is lost.
 
-        This deliberately uses only the presence of the RTAB-Map pose and the
-        benchmark clock.  MuJoCo truth is never consulted.  Alternating a slow
+        Uses RTAB-Map validity, the clock, gyro heading and measured ranges.
+        MuJoCo truth is never consulted. Alternating a slow
         yaw scan gives visual odometry new parallax while avoiding the blind,
         indefinite stop that a lost pose previously caused.
         """
@@ -255,6 +303,8 @@ class VslamE2EBenchmark:
             return None
         now = float(simulation_time)
         if global_pose is not None:
+            if sensor_yaw is not None:
+                self._last_tracking_yaw = float(sensor_yaw)
             self._initial_pose_seen = True
             self._pose_missing_since = None
             self._tracking_scan_active = False
@@ -282,6 +332,16 @@ class VslamE2EBenchmark:
             return np.zeros(3, dtype=np.float32)
         if missing_for < scan_delay:
             return np.zeros(3, dtype=np.float32)
+        if lidar is not None and missing_for < 2.0:
+            # A nearby featureless face fills the image; yaw recovery can
+            # trigger endless sideways turn-clearance escapes. First create
+            # camera stand-off, only if measured rear swept space is free.
+            near_face = lidar.planar_clearance(0.0, math.radians(20.0)) < 0.65
+            rear_space = lidar.translation_clearance(
+                math.pi, half_width=0.20, body_half_length=0.39
+            )
+            if near_face and rear_space > 0.20:
+                return np.array([-0.15, 0.0, 0.0], dtype=np.float32)
         if not self._tracking_scan_active:
             self._tracking_scan_active = True
             self.tracking_scan_actions += 1
@@ -300,6 +360,18 @@ class VslamE2EBenchmark:
         period = float(self.phase_config.get("tracking_scan_period", 2.0))
         direction = 1.0 if int(missing_for / period) % 2 == 0 else -1.0
         yaw_rate = float(self.phase_config.get("tracking_scan_yaw_rate", 0.35))
+        if self._last_tracking_yaw is not None and sensor_yaw is not None:
+            # Return to the last observed view first. An open-loop alternating
+            # velocity can keep looking away from it, especially when obstacle
+            # avoidance interrupts one half of the turn.
+            phase = max(0, int((missing_for - scan_delay) / period))
+            offsets = (0.0, -0.30, 0.30, -0.60, 0.60)
+            target = self._last_tracking_yaw + offsets[min(phase, len(offsets) - 1)]
+            direction = np.clip(
+                1.8 * angle_difference(target, float(sensor_yaw)),
+                -yaw_rate, yaw_rate,
+            )
+            return np.array([0.0, 0.0, direction], dtype=np.float32)
         return np.array([0.0, 0.0, direction * yaw_rate], dtype=np.float32)
 
     def heading_command(self, global_pose, max_yaw_rate=0.9):
@@ -318,6 +390,7 @@ class VslamE2EBenchmark:
         global_pose,
         contact,
         bridge,
+        control_diagnostics=None,
     ):
         self._elapsed(simulation_time)
         truth_pose = np.asarray(truth_pose, dtype=np.float64)
@@ -337,6 +410,23 @@ class VslamE2EBenchmark:
             self.longest_tracking_loss = max(self.longest_tracking_loss, duration)
             self._lost_since = None
         self._last_pose_ready = pose_ready
+
+        if float(simulation_time) - self._last_trace_time >= 0.25:
+            self._last_trace_time = float(simulation_time)
+            self.trace.append({
+                "simulation_time": float(simulation_time),
+                "waypoints_reached": self._mapping_index,
+                "truth_pose": truth_pose.tolist(),
+                "vslam_pose": None if self.last_vslam is None else self.last_vslam.tolist(),
+                "inliers": getattr(bridge, "odom_inliers", None),
+                "matches": getattr(bridge, "odom_matches", None),
+                "features": getattr(bridge, "odom_features", None),
+                "tracking_mode": bridge.tracking_mode,
+                "camera_frames": getattr(bridge, "camera_frames", None),
+                "odometry_messages": getattr(bridge, "odometry_messages", None),
+                "odometry_age_s": getattr(bridge, "odometry_age", None),
+                "control": control_diagnostics,
+            })
 
         if global_pose is not None:
             global_pose = np.asarray(global_pose, dtype=np.float64)
@@ -378,6 +468,15 @@ class VslamE2EBenchmark:
         active = force >= 5.0
         if active and not self._contact_active:
             self.contact_episodes += 1
+            event = {
+                "simulation_time": float(simulation_time),
+                "force_n": force,
+                "geoms": [contact[1], contact[2]],
+                "truth_pose": truth_pose.tolist(),
+                "control": control_diagnostics,
+            }
+            self.contact_events.append(event)
+            print("VSLAM score-only contact: " + json.dumps(event), flush=True)
         self._contact_active = active
         if force > self.max_contact_force:
             self.max_contact_force = force
@@ -408,6 +507,7 @@ class VslamE2EBenchmark:
             "longest_tracking_loss_s": longest_tracking_loss,
             "recovery_time_s": recovery,
             "contact_episodes": self.contact_episodes,
+            "contact_events": self.contact_events,
             "max_contact_force_n": self.max_contact_force,
             "strongest_contact": self.strongest_contact,
             "mean_position_drift_m": (
@@ -445,6 +545,15 @@ class VslamE2EBenchmark:
 
     def write_result(self, bridge):
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path.with_suffix(".trace.json").write_text(
+            json.dumps(self.trace, ensure_ascii=False, indent=2) + "\n"
+        )
+        grid = getattr(bridge, "_latest_map", None)
+        if grid is not None:
+            np.savez_compressed(
+                self.output_path.with_suffix(".map.npz"),
+                data=grid["data"], origin=grid["origin"], resolution=grid["resolution"],
+            )
         self.output_path.write_text(
             json.dumps(self.result(bridge), ensure_ascii=False, indent=2) + "\n"
         )

@@ -12,6 +12,8 @@ from ros2_vslam_bridge import Ros2VslamBridge
 from vslam_e2e_benchmark import VslamE2EBenchmark
 
 import os
+import signal
+from contextlib import nullcontext
 import time
 import mujoco.viewer
 import mujoco
@@ -201,6 +203,7 @@ if __name__ == "__main__":
         help="Start autonomous navigation to a world-coordinate goal.",
     )
     parser.add_argument("--save-video", action="store_true", help="Whether to save video of the simulation.")
+    parser.add_argument("--headless", action="store_true", help="Render sensors without a desktop viewer.")
     parser.add_argument("--visualize-moe-weights", action="store_true", help="Whether to visualize mixture of experts weights.")
     parser.add_argument("--save-moe-latent", action="store_true", help="Whether to save mixture of experts latent vectors.")
     parser.add_argument(
@@ -214,6 +217,8 @@ if __name__ == "__main__":
     parser.add_argument("--vslam-benchmark-config")
     parser.add_argument("--vslam-benchmark-output")
     args = parser.parse_args()
+    if args.headless and args.save_video:
+        parser.error("--save-video requires the desktop viewer")
     save_video = args.save_video
     visualize_moe_weights = args.visualize_moe_weights
     save_moe_latent = args.save_moe_latent
@@ -282,6 +287,19 @@ if __name__ == "__main__":
             # Global planning must consume RTAB-Map's optimized occupancy grid,
             # never the simulator's scene geometry.
             goal_navigation_config["map_source"] = "rtabmap"
+            # Flat-home navigation must avoid small objects as well as tall
+            # furniture. A single torso-height range ring misses foot hazards.
+            lidar_config = dict(lidar_config)
+            lidar_config["planar_scan_heights"] = ros2_vslam_config.get(
+                "planar_scan_heights", [0.04, 0.32]
+            )
+            navigation_config = dict(navigation_config)
+            navigation_config["max_step_up"] = float(
+                ros2_vslam_config.get("max_step_up", 0.04)
+            )
+            navigation_config["planar_obstacle_check"] = bool(
+                ros2_vslam_config.get("planar_obstacle_check", True)
+            )
         keyboard_config = config.get("keyboard", {})
 
         idx_model2mj = idx_mj2model = list(range(num_actions))
@@ -346,6 +364,10 @@ if __name__ == "__main__":
     renderer = mujoco.Renderer(m, height=360, width=640) if save_video else None
     ros2_vslam = None
     if ros2_vslam_config.get("enabled", False):
+        if args.vslam_benchmark_output:
+            ros2_vslam_config["diagnostic_dir"] = str(
+                Path(args.vslam_benchmark_output).with_suffix(".sensors")
+            )
         ros2_vslam = Ros2VslamBridge(m, d, ros2_vslam_config)
     vslam_benchmark = None
     if args.vslam_benchmark_phase:
@@ -360,6 +382,14 @@ if __name__ == "__main__":
             args.vslam_benchmark_phase,
             args.vslam_benchmark_output,
         )
+        goal_navigator.goal_tolerance = float(
+            vslam_benchmark.phase_config.get("goal_tolerance", goal_navigator.goal_tolerance)
+        )
+        def stop_benchmark(signum, _frame):
+            vslam_benchmark.failed_reason = f"interrupted by signal {signum}"
+            vslam_benchmark.finished = True
+        signal.signal(signal.SIGTERM, stop_benchmark)
+        signal.signal(signal.SIGINT, stop_benchmark)
     pending_goal_name = None
     pending_goal_coordinates = args.goal if ros2_vslam is not None else None
     
@@ -400,16 +430,21 @@ if __name__ == "__main__":
     print("Arrow keys or keypad 8/2/4/6: move | Space/keypad 5: stop | R: reset")
     if preset_help:
         print(f"Goal navigation: {preset_help} | 0:cancel")
-    with mujoco.viewer.launch_passive(m, d, key_callback=keyboard.handle_key) as viewer:
+    viewer_context = (
+        nullcontext(None) if args.headless else
+        mujoco.viewer.launch_passive(m, d, key_callback=keyboard.handle_key)
+    )
+    with viewer_context as viewer:
 
         # set viewer.camera to follow robot
-        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-        viewer.cam.trackbodyid = 1
-        viewer.cam.distance = float(camera_config.get("distance", 2.0))
-        viewer.cam.elevation = float(camera_config.get("elevation", -20.0))
-        viewer.cam.azimuth = float(camera_config.get("azimuth", 60.0))
-        with viewer.lock():
-            normalize_view_options(viewer)
+        if viewer is not None:
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+            viewer.cam.trackbodyid = 1
+            viewer.cam.distance = float(camera_config.get("distance", 2.0))
+            viewer.cam.elevation = float(camera_config.get("elevation", -20.0))
+            viewer.cam.azimuth = float(camera_config.get("azimuth", 60.0))
+            with viewer.lock():
+                normalize_view_options(viewer)
 
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
@@ -417,7 +452,7 @@ if __name__ == "__main__":
         simulation_clock_start = float(d.time)
         realtime_factor = 1.0
         contact_status = "Contact: none"
-        while viewer.is_running() and time.time() - start < simulation_duration:
+        while (viewer is None or viewer.is_running()) and time.time() - start < simulation_duration:
             if keyboard.reset_requested:
                 mujoco.mj_resetData(m, d)
                 mujoco.mj_forward(m, d)
@@ -444,6 +479,10 @@ if __name__ == "__main__":
             ang_vel = d.qvel[3:6]
             local_vel = quat_rotate_inverse(d.qpos[3:7], vel)
             local_ang_vel = quat_rotate_inverse(d.qpos[3:7], ang_vel)
+            navigation_velocity = (
+                ros2_vslam.navigation_velocity if ros2_vslam is not None else
+                np.array([local_vel[0], local_vel[1], local_ang_vel[2]], dtype=np.float32)
+            )
             global_pose = ros2_vslam.global_pose if ros2_vslam is not None else None
             if ros2_vslam is not None:
                 map_update = ros2_vslam.take_navigation_map()
@@ -499,7 +538,9 @@ if __name__ == "__main__":
                     if vslam_benchmark is not None else None
                 )
                 benchmark_tracking_recovery = (
-                    vslam_benchmark.tracking_recovery_command(global_pose, d.time)
+                    vslam_benchmark.tracking_recovery_command(
+                        global_pose, d.time, ros2_vslam.sensor_yaw, lidar
+                    )
                     if vslam_benchmark is not None else None
                 )
                 goal_control = goal_navigator.active or benchmark_direct or (
@@ -521,10 +562,7 @@ if __name__ == "__main__":
                         manual_cmd = high_level_navigator.command(
                             vslam_benchmark.direct_target,
                             global_pose[:2], global_pose[2],
-                            np.array(
-                                [local_vel[0], local_vel[1], local_ang_vel[2]],
-                                dtype=np.float32,
-                            ),
+                            navigation_velocity,
                             lidar,
                         )
                 elif goal_control:
@@ -545,14 +583,7 @@ if __name__ == "__main__":
                                 goal_navigator.path[waypoint_index],
                                 global_pose[:2],
                                 global_pose[2],
-                                np.array(
-                                    [
-                                        local_vel[0],
-                                        local_vel[1],
-                                        local_ang_vel[2],
-                                    ],
-                                    dtype=np.float32,
-                                ),
+                                navigation_velocity,
                                 lidar,
                             )
                             if learned_command is not None:
@@ -575,7 +606,7 @@ if __name__ == "__main__":
                     lidar,
                     navigation_yaw,
                     autonomous=goal_control,
-                    lateral_velocity=float(local_vel[1]),
+                    lateral_velocity=float(navigation_velocity[1]),
                     goal_distance=(
                         goal_navigator.last_distance if goal_control else None
                     ),
@@ -650,12 +681,25 @@ if __name__ == "__main__":
                     [d.qpos[0], d.qpos[1], get_yaw(d.qpos[3:7])],
                     dtype=np.float64,
                 )
+                benchmark_contact = get_environment_contact_details(m, d)
                 vslam_benchmark.observe(
                     d.time,
                     truth_pose,
                     ros2_vslam.global_pose,
-                    get_environment_contact_details(m, d),
+                    benchmark_contact,
                     ros2_vslam,
+                    control_diagnostics={
+                        "command": np.asarray(cmd).tolist(),
+                        "navigation_state": navigator.state,
+                        "hazard": navigator.hazard,
+                        # Diagnostic-only joint snapshot for reconstructing
+                        # gait contact geometry offline; never a nav input.
+                        "qpos": (
+                            d.qpos.tolist()
+                            if benchmark_contact is not None and benchmark_contact[0] >= 5.0
+                            else None
+                        ),
+                    },
                 )
 
             if save_video and counter % frame_skip == 0:
@@ -735,7 +779,7 @@ if __name__ == "__main__":
             # physics rate makes the viewer look like slow motion.  Render at
             # a human-visible rate and pace against accumulated simulation
             # time, so compute overhead does not add once per physics step.
-            if counter % render_decimation == 0:
+            if viewer is not None and counter % render_decimation == 0:
                 contact_status = get_environment_contact(m, d)
                 grid_image = lidar.consume_image() if lidar is not None else None
                 # The passive viewer renders on another thread.  Rebuilding
@@ -771,6 +815,7 @@ if __name__ == "__main__":
                     )
                 viewer.sync()
 
+            if counter % render_decimation == 0:
                 simulated_elapsed = float(d.time) - simulation_clock_start
                 target_wall_time = wall_clock_start + simulated_elapsed
                 remaining = target_wall_time - time.perf_counter()
@@ -780,7 +825,12 @@ if __name__ == "__main__":
                 if wall_elapsed > 1.0e-6:
                     realtime_factor = simulated_elapsed / wall_elapsed
             if vslam_benchmark is not None and vslam_benchmark.finished:
-                break
+                # Save before leaving launch_passive(): GLFW teardown itself
+                # can deadlock, before the old result-writing code is reached.
+                vslam_benchmark.write_result(ros2_vslam)
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(0)
 
     # writer.close()
     if save_video:

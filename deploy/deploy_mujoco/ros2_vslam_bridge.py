@@ -6,6 +6,7 @@ odometry, loop closure, graph optimization and the global occupancy map.
 """
 
 import math
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -21,7 +22,10 @@ class Ros2VslamBridge:
             from nav_msgs.msg import OccupancyGrid, Odometry
             from rclpy.duration import Duration
             from rclpy.node import Node
-            from rclpy.qos import qos_profile_sensor_data
+            from rclpy.parameter import Parameter
+            from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+            from rosgraph_msgs.msg import Clock
+            from rtabmap_msgs.msg import RGBDImage
             from rclpy.time import Time
             from sensor_msgs.msg import CameraInfo, Image, Imu
             from std_msgs.msg import String
@@ -42,6 +46,8 @@ class Ros2VslamBridge:
         self._String = String
         self._TransformStamped = TransformStamped
         self._Empty = Empty
+        self._Clock = Clock
+        self._RGBDImage = RGBDImage
         self.model = model
         self.data = data
 
@@ -64,6 +70,7 @@ class Ros2VslamBridge:
 
         self.tracking_mode = "WAITING FOR RTAB-MAP"
         self.odometry_messages = 0
+        self._navigation_velocity = np.zeros(3, dtype=np.float64)
         self.map_updates = 0
         self.loop_closures = 0
         self._last_loop_closure_id = 0
@@ -74,10 +81,30 @@ class Ros2VslamBridge:
         self._consumed_map_update = 0
         self._navigation_goal = None
         self.camera_blocked = False
+        self._sensor_time_ns = 0
+        self._last_odom_stamp_ns = None
+        self._last_pose_stamp_ns = None
+        self.pose_timeout = float(config.get("pose_timeout", 0.5))
+        self.odom_inliers = 0
+        self.odom_matches = 0
+        self.odom_features = 0
+        self.diagnostic_dir = config.get("diagnostic_dir")
+        self._capture_loss = False
 
         if not rclpy.ok():
             rclpy.init(args=None)
-        self.node = Node("go2_mujoco_rgbd_sensor")
+        self.node = Node(
+            "go2_mujoco_rgbd_sensor",
+            parameter_overrides=[Parameter("use_sim_time", value=True)],
+        )
+        self.clock_pub = self.node.create_publisher(Clock, "/clock", 10)
+        # A single reliable sample keeps RGB, metric depth and calibration
+        # together. Three best-effort streams plus exact-sync discarded whole
+        # frames whenever just one large image packet was dropped.
+        self.rgbd_pub = self.node.create_publisher(
+            RGBDImage, "/go2/camera/rgbd_image", QoSProfile(depth=2)
+        )
+        self.camera_frames = 0
         self.rgb_pub = self.node.create_publisher(
             Image, "/go2/camera/color/image_raw", qos_profile_sensor_data
         )
@@ -108,7 +135,8 @@ class Ros2VslamBridge:
             qos_profile_sensor_data,
         )
         self.node.create_subscription(
-            OccupancyGrid, "/map", self._map_callback, 1
+            OccupancyGrid, "/map", self._map_callback,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
         )
         self.node.create_subscription(
             PoseStamped, "/goal_pose", self._goal_callback, 10
@@ -249,7 +277,7 @@ class Ros2VslamBridge:
         if simulation_time - self.last_imu_publish_time < self.imu_publish_interval:
             return
         self.last_imu_publish_time = simulation_time
-        stamp = self.node.get_clock().now().to_msg()
+        stamp = self._Time(nanoseconds=self._sensor_time_ns).to_msg()
         message = self._Imu()
         message.header.stamp = stamp
         message.header.frame_id = self.base_frame_id
@@ -282,10 +310,19 @@ class Ros2VslamBridge:
         self.imu_pub.publish(message)
 
     def _odom_callback(self, message):
+        stamp_ns = self._stamp_ns(message.header.stamp)
+        if self._last_odom_stamp_ns is not None and stamp_ns < self._last_odom_stamp_ns:
+            return
+        self._last_odom_stamp_ns = stamp_ns
         self.odometry_messages += 1
         q = message.pose.pose.orientation
         quaternion_norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w
+        if quaternion_norm < 0.5 and not self._odometry_lost:
+            self._capture_loss = True
         self._odometry_lost = quaternion_norm < 0.5
+        if not self._odometry_lost:
+            twist = message.twist.twist
+            self._navigation_velocity[:] = [twist.linear.x, twist.linear.y, twist.angular.z]
         if not self._odometry_lost and (
             self.tracking_mode.startswith("WAITING")
             or self.tracking_mode == "VISUAL TRACKING LOST"
@@ -296,7 +333,16 @@ class Ros2VslamBridge:
         # A null odometry message is still published while tracking is lost.
         # Invalidate the cached map pose immediately so navigation can never
         # continue on a stale transform.
+        stamp_ns = self._stamp_ns(message.header.stamp)
+        if self._last_odom_stamp_ns is not None and stamp_ns < self._last_odom_stamp_ns:
+            return
+        self._last_odom_stamp_ns = stamp_ns
+        self.odom_inliers = int(message.inliers)
+        self.odom_matches = int(message.matches)
+        self.odom_features = int(message.features)
         if bool(message.lost):
+            if not self._odometry_lost:
+                self._capture_loss = True
             self._odometry_lost = True
             self._global_pose = None
             self.tracking_mode = "VISUAL TRACKING LOST"
@@ -343,6 +389,10 @@ class Ros2VslamBridge:
         )
 
     @staticmethod
+    def _stamp_ns(stamp):
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+    @staticmethod
     def _yaw_from_quaternion(rotation):
         return math.atan2(
             2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
@@ -352,6 +402,16 @@ class Ros2VslamBridge:
     def _update_global_pose(self):
         if self._odometry_lost:
             self._global_pose = None
+            self.tracking_mode = "VISUAL TRACKING LOST"
+            return
+        if (
+            self._last_odom_stamp_ns is None
+            or self._sensor_time_ns - self._last_odom_stamp_ns
+            > int(self.pose_timeout * 1e9)
+            or self._last_odom_stamp_ns > self._sensor_time_ns
+        ):
+            self._global_pose = None
+            self.tracking_mode = "ODOMETRY STALE"
             return
         try:
             transform = self.tf_buffer.lookup_transform(
@@ -361,6 +421,15 @@ class Ros2VslamBridge:
                 timeout=self._Duration(seconds=0.0),
             )
         except Exception:
+            self._global_pose = None
+            self.tracking_mode = "WAITING FOR MAP TF"
+            return
+        self._last_pose_stamp_ns = self._stamp_ns(transform.header.stamp)
+        if self._sensor_time_ns - self._stamp_ns(transform.header.stamp) > int(
+            self.pose_timeout * 1e9
+        ):
+            self._global_pose = None
+            self.tracking_mode = "GLOBAL TRANSFORM STALE"
             return
         translation = transform.transform.translation
         rotation = transform.transform.rotation
@@ -375,16 +444,28 @@ class Ros2VslamBridge:
                 math.sin(visual_yaw - imu_yaw),
                 math.cos(visual_yaw - imu_yaw),
             )
-        fused_yaw = math.atan2(
-            math.sin(imu_yaw + self._imu_map_yaw_offset),
-            math.cos(imu_yaw + self._imu_map_yaw_offset),
-        )
+        # A graph correction changes heading as well as position. A one-time
+        # IMU alignment must not override subsequent visual loop corrections.
         self._global_pose = np.array(
-            [translation.x, translation.y, fused_yaw],
+            [translation.x, translation.y, visual_yaw],
             dtype=np.float64,
         )
         if not self.tracking_mode.startswith("LOOP CLOSED"):
             self.tracking_mode = "GLOBAL TRACKING"
+
+    @property
+    def odometry_age(self):
+        return (
+            None if self._last_odom_stamp_ns is None else
+            (self._sensor_time_ns - self._last_odom_stamp_ns) / 1e9
+        )
+
+    @property
+    def navigation_velocity(self):
+        """Body velocity estimated by visual odometry, never world truth."""
+        if self._global_pose is None:
+            return np.zeros(3, dtype=np.float64)
+        return self._navigation_velocity.copy()
 
     @property
     def global_pose(self):
@@ -424,6 +505,13 @@ class Ros2VslamBridge:
         return goal
 
     def update(self, simulation_time):
+        self._sensor_time_ns = round(float(simulation_time) * 1e9)
+        # All sensors describe the same physics clock, regardless of rendering
+        # cost or real-time factor. Stamp before rendering, never at send time.
+        if simulation_time - self.last_imu_publish_time >= self.imu_publish_interval:
+            clock = self._Clock()
+            clock.clock = self._Time(nanoseconds=self._sensor_time_ns).to_msg()
+            self.clock_pub.publish(clock)
         # Always service subscriptions so graph corrections are available to
         # the controller even between camera frames.
         self._rclpy.spin_once(self.node, timeout_sec=0.0)
@@ -455,10 +543,29 @@ class Ros2VslamBridge:
         valid_depth &= depth <= self.max_depth
         depth[~valid_depth] = 0.0
 
-        stamp = self.node.get_clock().now().to_msg()
+        if self._capture_loss and self.diagnostic_dir:
+            import cv2
+            directory = Path(self.diagnostic_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"loss_{simulation_time:.3f}"
+            cv2.imwrite(str(path) + ".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            np.savez_compressed(str(path) + ".depth.npz", depth=depth)
+            self._capture_loss = False
+
+        stamp = self._Time(nanoseconds=self._sensor_time_ns).to_msg()
         self.camera_info.header.stamp = stamp
-        self.rgb_pub.publish(self._image_message(rgb, stamp, "rgb8"))
-        self.depth_pub.publish(self._image_message(depth, stamp, "32FC1"))
+        rgb_message = self._image_message(rgb, stamp, "rgb8")
+        depth_message = self._image_message(depth, stamp, "32FC1")
+        sample = self._RGBDImage()
+        sample.header = rgb_message.header
+        sample.rgb_camera_info = self.camera_info
+        sample.depth_camera_info = self.camera_info
+        sample.rgb = rgb_message
+        sample.depth = depth_message
+        self.rgbd_pub.publish(sample)
+        self.camera_frames += 1
+        self.rgb_pub.publish(rgb_message)
+        self.depth_pub.publish(depth_message)
         self.info_pub.publish(self.camera_info)
 
         status = self._String()
@@ -483,6 +590,7 @@ class Ros2VslamBridge:
         self._global_pose = None
         self._imu_map_yaw_offset = None
         self._odometry_lost = True
+        self._last_odom_stamp_ns = None
         self.tracking_mode = "WAITING FOR RELOCALIZATION"
         self.last_publish_time = -np.inf
         self.last_imu_publish_time = -np.inf

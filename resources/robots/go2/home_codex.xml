@@ -11,23 +11,32 @@
 
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.78 0.86 0.94" rgb2="0.30 0.38 0.48" width="512" height="3072"/>
-    <texture type="2d" name="home_floor_tex" builtin="checker" mark="edge"
-             rgb1="0.72 0.65 0.54" rgb2="0.64 0.56 0.45" markrgb="0.45 0.38 0.30"
-             width="400" height="400"/>
-    <material name="home_floor" texture="home_floor_tex" texuniform="true" texrepeat="14 12" reflectance="0.04"/>
-    <material name="wall" rgba="0.91 0.90 0.86 1"/>
+    <!-- Fixed surface texture is observable sensor input, not a pose marker.
+         Avoid sub-pixel, repeated checkerboards that alias during walking.
+         All geometry and contact dimensions below remain unchanged. -->
+    <texture type="2d" name="home_floor_tex" builtin="flat" mark="random" random="0.12"
+             rgb1="0.50 0.43 0.34" rgb2="0.50 0.43 0.34" markrgb="0.26 0.20 0.14"
+             width="512" height="512"/>
+    <material name="home_floor" texture="home_floor_tex" texuniform="true" texrepeat="0.10 0.10" reflectance="0"/>
+    <texture type="cube" name="wall_plaster_tex" builtin="flat" mark="random" random="0.10"
+             rgb1="0.78 0.77 0.73" rgb2="0.78 0.77 0.73" markrgb="0.48 0.47 0.43"
+             width="512" height="3072"/>
+    <material name="wall" texture="wall_plaster_tex" texuniform="false"/>
+    <texture type="cube" name="surface_detail_tex" builtin="flat" mark="random" random="0.14"
+             rgb1="1 1 1" rgb2="1 1 1" markrgb="0.55 0.55 0.55"
+             width="128" height="768"/>
     <material name="art_blue" rgba="0.18 0.34 0.58 1"/>
     <material name="art_ochre" rgba="0.72 0.43 0.15 1"/>
     <material name="art_green" rgba="0.20 0.50 0.34 1"/>
     <material name="art_red" rgba="0.64 0.23 0.20 1"/>
-    <material name="wood" rgba="0.42 0.24 0.12 1"/>
-    <material name="light_wood" rgba="0.68 0.48 0.27 1"/>
-    <material name="sofa" rgba="0.18 0.36 0.52 1"/>
-    <material name="fabric" rgba="0.72 0.68 0.62 1"/>
-    <material name="home_metal" rgba="0.36 0.39 0.43 1"/>
-    <material name="appliance" rgba="0.82 0.85 0.88 1"/>
+    <material name="wood" texture="surface_detail_tex" rgba="0.42 0.24 0.12 1"/>
+    <material name="light_wood" texture="surface_detail_tex" rgba="0.68 0.48 0.27 1"/>
+    <material name="sofa" texture="surface_detail_tex" rgba="0.18 0.36 0.52 1"/>
+    <material name="fabric" texture="surface_detail_tex" rgba="0.72 0.68 0.62 1"/>
+    <material name="home_metal" texture="surface_detail_tex" rgba="0.36 0.39 0.43 1"/>
+    <material name="appliance" texture="surface_detail_tex" rgba="0.82 0.85 0.88 1"/>
     <material name="plant" rgba="0.12 0.48 0.19 1"/>
-    <material name="cardboard" rgba="0.58 0.39 0.20 1"/>
+    <material name="cardboard" texture="surface_detail_tex" rgba="0.58 0.39 0.20 1"/>
     <material name="rug" rgba="0.46 0.18 0.16 1"/>
   </asset>
 

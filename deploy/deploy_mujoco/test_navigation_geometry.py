@@ -101,6 +101,7 @@ def check_home_side_wall_escape():
     lidar.scan()
     navigator = TerrainNavigator(config["navigation"])
     turn_right = np.array([0.0, 0.0, -1.2], dtype=np.float32)
+    navigator.state = "BLOCKED"
     command = navigator.update(turn_right, lidar, np.deg2rad(-0.3455))
     assert navigator.state == "LATERAL_FOR_TURN", navigator.status_text()
     assert command[0] == 0.0 and command[1] < 0.0 and command[2] == 0.0
@@ -124,6 +125,101 @@ def main():
     check_scene("cliff_avoidance_codex.xml", 0.45, "DROP")
     check_home_narrow_passage()
     check_home_side_wall_escape()
+    check_low_object_scan()
+    check_toy_between_elevation_samples()
+    check_low_scan_above_rug()
+    check_recorded_rear_foot_arc()
+
+
+def check_low_object_scan():
+    config = yaml.safe_load((ROOT / "deploy/deploy_mujoco/configs/go2_home.yaml").read_text())
+    model = mujoco.MjModel.from_xml_path(str(ROOT / "resources/robots/go2/home_codex.xml"))
+    data = mujoco.MjData(model)
+    data.qpos[:7] = [-2.0, 1.75, 0.30, 1, 0, 0, 0]
+    data.qpos[7:19] = config["default_angles"]
+    mujoco.mj_forward(model, data)
+    upper = LidarHeightMap(model, data, config["lidar"])
+    lower = LidarHeightMap(model, data, dict(config["lidar"], planar_scan_heights=[0.05, 0.32]))
+    upper.scan()
+    lower.scan()
+    index = np.argmin(np.abs(lower.planar_angles))
+    assert lower.planar_ranges[index] < 0.39, lower.planar_ranges[index]
+    assert upper.planar_ranges[index] > 0.60, upper.planar_ranges[index]
+    navigator = TerrainNavigator(config["navigation"])
+    command = navigator.update([0, 0, 0.45], lower, 0, autonomous=True)
+    assert command[2] == 0.0 and np.linalg.norm(command[:2]) > 0.0, command
+    indoor = TerrainNavigator(dict(config["navigation"], max_step_up=0.04))
+    assert indoor.analyze(lower)[0] == "OBSTACLE"
+    print(f"low book: range={lower.planar_ranges[index]:.3f}m; safe escape={command}")
+
+
+def check_toy_between_elevation_samples():
+    """Recorded pre-contact pose: toy is inside footprint but between cells."""
+    config = yaml.safe_load((ROOT / "deploy/deploy_mujoco/configs/go2_home.yaml").read_text())
+    model = mujoco.MjModel.from_xml_path(str(ROOT / "resources/robots/go2/home_codex.xml"))
+    data = mujoco.MjData(model)
+    yaw = -0.12
+    data.qpos[:7] = [0.94, 1.48, 0.30, np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+    data.qpos[7:19] = config["default_angles"]
+    mujoco.mj_forward(model, data)
+    lidar = LidarHeightMap(model, data, dict(config["lidar"], planar_scan_heights=[0.05, 0.32]))
+    lidar.scan()
+    legacy = TerrainNavigator(dict(config["navigation"], max_step_up=0.04))
+    fixed = TerrainNavigator(dict(config["navigation"], max_step_up=0.04, planar_obstacle_check=True))
+    assert legacy.analyze(lidar)[0] == "CLEAR"
+    hazard, distance = fixed.analyze(lidar)
+    assert hazard == "OBSTACLE" and 0.45 < distance < 0.60, (hazard, distance)
+    assert fixed._candidate_result(lidar, 0.0)[0] == "OBSTACLE"
+    # A measured return outside the exact footprint is not an invisible wall.
+    lidar.elevation.fill(0)
+    lidar.planar_ranges.fill(lidar.planar_max_range)
+    index = np.argmin(np.abs(lidar.planar_angles - np.pi / 4))
+    lidar.planar_ranges[index] = 0.50
+    assert fixed.analyze(lidar)[0] == "CLEAR"
+    print(f"toy between grid samples: detected at {distance:.3f}m, no footprint inflation")
+
+
+def check_low_scan_above_rug():
+    config = yaml.safe_load((ROOT / "deploy/deploy_mujoco/configs/go2_home.yaml").read_text())
+    model = mujoco.MjModel.from_xml_path(str(ROOT / "resources/robots/go2/home_codex.xml"))
+    data = mujoco.MjData(model)
+    yaw = 0.520141
+    data.qpos[:7] = [-1.408105, 1.3567, 0.30, np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+    data.qpos[7:19] = config["default_angles"]
+    mujoco.mj_forward(model, data)
+    old = LidarHeightMap(model, data, dict(config["lidar"], planar_scan_heights=[0.05, 0.32]))
+    fixed = LidarHeightMap(model, data, dict(config["lidar"], planar_scan_heights=config["ros2_vslam"]["planar_scan_heights"]))
+    old.scan()
+    fixed.scan()
+    assert abs(fixed.baseline - 0.024) < 1e-6, fixed.baseline
+    assert old.planar_clearance() > 0.5
+    assert fixed.planar_clearance() < 0.3
+    print(f"book beside rug: old range={old.planar_clearance():.3f}, corrected={fixed.planar_clearance():.3f}")
+
+
+def check_recorded_rear_foot_arc():
+    """Reconstruct the measured failing gait pose; truth is test-only input."""
+    config = yaml.safe_load((ROOT / "deploy/deploy_mujoco/configs/go2_home.yaml").read_text())
+    model = mujoco.MjModel.from_xml_path(str(ROOT / "resources/robots/go2/home_codex.xml"))
+    data = mujoco.MjData(model)
+    data.qpos[:] = [
+        -1.6862648063, 1.3874275675, 0.3482281996,
+        0.8683298324, -0.0008938442, 0.0107929500, -0.4958689498,
+        0.0754702744, 0.9568666374, -1.0161424751,
+        0.1317224087, 0.7716578586, -1.6169130900,
+        0.1332249653, 0.8552972357, -1.5120527947,
+        -0.0867419629, 0.7440004556, -1.2476749376,
+    ]
+    mujoco.mj_forward(model, data)
+    lidar = LidarHeightMap(model, data, dict(config["lidar"], planar_scan_heights=[0.04, 0.32]))
+    lidar.scan()
+    navigator = TerrainNavigator(dict(config["navigation"], max_step_up=0.04, planar_obstacle_check=True))
+    old_command = [0.2104455084, 0, -0.3675268292]
+    assert not navigator._swept_motion_clear(old_command, lidar)
+    corrected = navigator._guard_swept_motion(old_command, lidar)
+    assert corrected[0] > 0 and abs(corrected[2]) < 1e-6
+    assert navigator._swept_motion_clear(corrected, lidar)
+    print(f"recorded rear-foot contact: unsafe arc replaced by {corrected}")
 
 
 if __name__ == "__main__":

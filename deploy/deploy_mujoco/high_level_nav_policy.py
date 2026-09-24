@@ -109,6 +109,27 @@ class HighLevelNavigationPolicy:
         if not self.enabled or self.policy is None:
             return None
         delta = np.asarray(target)[:2] - np.asarray(position)[:2]
+        distance = float(np.linalg.norm(delta))
+        if distance < 0.40:
+            # The PPO's training success radius is too coarse for docking.
+            # At short range its yaw/lateral actions can orbit the target.
+            # Resolve the remaining sensor-pose error with a bounded body
+            # translation, retaining the downstream terrain safety filter
+            # and the same RL locomotion policy. No simulator pose is used.
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            local_error = np.array([
+                cy * delta[0] + sy * delta[1],
+                -sy * delta[0] + cy * delta[1],
+            ])
+            command = np.zeros(3, dtype=np.float32)
+            command[:2] = np.clip(
+                0.8 * local_error - 0.15 * np.asarray(local_velocity)[:2],
+                [-min(0.20, self.max_speed), -min(0.20, self.max_lateral_speed)],
+                [min(0.20, self.max_speed), min(0.20, self.max_lateral_speed)],
+            )
+            self.reorienting = False
+            self.previous_command[:] = command
+            return command
         heading_error = float(np.arctan2(
             np.sin(np.arctan2(delta[1], delta[0]) - yaw),
             np.cos(np.arctan2(delta[1], delta[0]) - yaw),

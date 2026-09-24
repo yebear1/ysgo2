@@ -338,6 +338,15 @@ class GoalNavigator:
             self.active = False
             self.path = []
             return False
+        if self.dynamic_map and np.linalg.norm(
+            self._grid_to_world(goal) - self.goal
+        ) > self.goal_tolerance:
+            # A bad/unknown map is not permission to substitute a distant
+            # free cell and announce that the requested destination arrived.
+            self.failed = True
+            self.active = False
+            self.path = []
+            return False
         cells = self._astar(start, goal)
         if not cells:
             self.failed = True

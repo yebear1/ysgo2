@@ -2,6 +2,7 @@
 """Merge mapping and localization phase metrics into one VSLAM report."""
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -43,11 +44,16 @@ def main():
         (item for item in localization["goals"] if item["name"] == "start"),
         None,
     )
-    return_position_error = (
-        float(return_goal["truth_position_error_m"])
-        if return_goal is not None else math.inf
-    )
     truth_final = localization.get("truth_final_pose")
+    # Score the pose after final heading alignment, not the earlier instant
+    # the arrival flag fired. Turning can translate a quadruped away again.
+    return_position_error = (
+        math.hypot(
+            float(truth_final[0]) - float(config["localization"]["goals"][-1]["position"][0]),
+            float(truth_final[1]) - float(config["localization"]["goals"][-1]["position"][1]),
+        )
+        if return_goal is not None and truth_final is not None else math.inf
+    )
     desired_yaw = float(config["localization"]["goals"][-1].get("yaw", 0.0))
     return_yaw_error = (
         abs(math.atan2(
@@ -73,7 +79,12 @@ def main():
         "localization_finished": bool(
             localization["finished"] and not localization["failed_reason"]
         ),
-        "all_goals_reached": reached_goals == expected_goals,
+        "all_goals_reached": reached_goals == expected_goals and all(
+            float(goal["truth_position_error_m"]) <= float(
+                thresholds.get("goal_position_error", thresholds["return_position_error"])
+            )
+            for goal in localization["goals"]
+        ),
         "zero_furniture_collisions": contacts <= int(
             thresholds["max_contact_episodes"]
         ),
@@ -95,6 +106,8 @@ def main():
         "passed": all(checks.values()),
         "checks": checks,
         "database": str(args.database),
+        "mapping_report": str(args.mapping),
+        "localization_report": str(args.localization),
         "database_size_bytes": (
             args.database.stat().st_size if args.database.is_file() else 0
         ),
@@ -114,6 +127,9 @@ def main():
         "mapping": mapping,
         "localization": localization,
     }
+    if args.database.is_file():
+        with args.database.open("rb") as stream:
+            report["database_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.json_output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n"
@@ -150,7 +166,7 @@ def main():
     lines.extend(
         [
             "",
-            "导航输入仅来自 RTAB-Map 位姿和保存的占据栅格。MuJoCo 真值只用于本报告评分。",
+            "全局导航使用 RTAB-Map 位姿和保存的占据栅格，局部避障使用模拟距离扫描。MuJoCo 真值位姿只用于评分，不校正导航；底层 RL 保留模拟本体感知和地形观测。",
             "",
         ]
     )
