@@ -204,6 +204,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--save-video", action="store_true", help="Whether to save video of the simulation.")
     parser.add_argument("--headless", action="store_true", help="Render sensors without a desktop viewer.")
+    parser.add_argument("--vslam-initial-yaw-deg", type=float, default=0.0,
+                        help="Benchmark fixture only: rotate initial physical robot pose, not SLAM.")
     parser.add_argument("--visualize-moe-weights", action="store_true", help="Whether to visualize mixture of experts weights.")
     parser.add_argument("--save-moe-latent", action="store_true", help="Whether to save mixture of experts latent vectors.")
     parser.add_argument(
@@ -337,6 +339,13 @@ if __name__ == "__main__":
     # Load robot model
     m = mujoco.MjModel.from_xml_path(xml_path)
     d = mujoco.MjData(m)
+    if args.vslam_initial_yaw_deg != 0.0:
+        if not args.vslam_benchmark_phase or not np.isfinite(args.vslam_initial_yaw_deg):
+            raise ValueError("Initial-yaw variation requires a benchmark and a finite angle")
+        yaw = np.deg2rad(args.vslam_initial_yaw_deg)
+        rotated = np.empty(4)
+        mujoco.mju_mulQuat(rotated, np.array([np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]), d.qpos[3:7].copy())
+        d.qpos[3:7] = rotated
     m.opt.timestep = simulation_dt
     mujoco.mj_forward(m, d)
     lidar = None
@@ -686,6 +695,7 @@ if __name__ == "__main__":
                         "command": np.asarray(cmd).tolist(),
                         "navigation_state": navigator.state,
                         "hazard": navigator.hazard,
+                        "navigation_active": bool(goal_control),
                         # Diagnostic-only joint snapshot for reconstructing
                         # gait contact geometry offline; never a nav input.
                         "qpos": (

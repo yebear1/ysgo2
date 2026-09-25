@@ -450,6 +450,8 @@ class VslamE2EBenchmark:
                 "odometry_messages": getattr(bridge, "odometry_messages", None),
                 "odometry_age_s": getattr(bridge, "odometry_age", None),
                 "control": control_diagnostics,
+                "active_goal_index": self._pending_goal_index,
+                "camera_blocked": self.camera_blocked,
             })
 
         if global_pose is not None:
