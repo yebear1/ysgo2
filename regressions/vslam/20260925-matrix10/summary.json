@@ -1,0 +1,501 @@
+{
+  "schema_version": 1,
+  "final": true,
+  "manifest": {
+    "baseline_tag": "vslam-pass-20260925",
+    "baseline_commit": "0e36e07b3488095fe380c4c909646c2368e32797",
+    "test_commit": "c1ce429154119e8eea8f6705579bf1b29c45fac6",
+    "source_sha256": {
+      "deploy/deploy_mujoco/configs/go2.yaml": "69d3564f6ae48023b613aa58b8c0db6fab4698724b384ff6164f18240c0abdae",
+      "deploy/deploy_mujoco/configs/go2_home.yaml": "cb6f097b6a6f676049240e20d6ff2aaae16f0ce222b462df61a24d6e94ad89c2",
+      "deploy/deploy_mujoco/configs/go2_stairs.yaml": "ebd304e85f0fe723ac986f611c025c8f849d5c081d0b170525145de6d3850f43",
+      "deploy/deploy_mujoco/configs/go2_vslam.rviz": "2bc655d0f019c1a797b9e28d98eaa5470e1b12d3eb9d5ee87be3f4da454bd135",
+      "deploy/deploy_mujoco/configs/home_benchmark.yaml": "1554d6b6b78623937bafd78aadcab78c19e3e57fcc83f293b1db21ca29823955",
+      "deploy/deploy_mujoco/configs/vslam_e2e_benchmark.yaml": "c66e35a4b970bff002c31acef3e3855c1f680b99a59d18c25ff574f038f489c3",
+      "deploy/deploy_mujoco/deploy_go2.py": "04b2910ff9f7eec66e06ccf85d5803a3c55ad87631bab87f1428c1a8fa4d709d",
+      "deploy/deploy_mujoco/export_teacher_policy.py": "e770e89348a5e7c4b0743e3e92063d22bd80472b6e82cd09381a4a260b1dbc30",
+      "deploy/deploy_mujoco/goal_navigator.py": "fd5c156218b201f9fe4dbe3c68e828c95b035aee291729ac0ca42fd62c565d8d",
+      "deploy/deploy_mujoco/high_level_nav_policy.py": "06dd69d42804c25bd480b6e680cb7565661a0d10a049b436855efecf993baba6",
+      "deploy/deploy_mujoco/home_navigation_benchmark.py": "c13f15c2d81d545c2533528e11779744977736ef7c5718c39fcfd19e89908efd",
+      "deploy/deploy_mujoco/lidar_heightmap.py": "5322eb41503d6a2d9268b24cb19b1ecbf1dd38ba2742abcfa0997c95dc0145f4",
+      "deploy/deploy_mujoco/perceptive_observation.py": "4f649a9e6561e4bb623cecbc6b035953b570aebfc754a2b551d7cdeff2cbdbef",
+      "deploy/deploy_mujoco/ros2_vslam_bridge.py": "d02403d2ce0d59b94c24cb080861ea8fa683cde5d5ada20342e4b88ec7dcb89f",
+      "deploy/deploy_mujoco/run_vslam_batch.py": "2a52ada5af50ec551cb3212b30d5f0d3f12fd3e820475602d6188370ab976bfb",
+      "deploy/deploy_mujoco/summarize_vslam_e2e.py": "b885a5ce40a6ddad27d03d7916339e265e7012daae33fdb3dd4b536cf80d9f75",
+      "deploy/deploy_mujoco/terrain_navigator.py": "2e0a3c526090ae39eefeb29e1a3941e964f1b60f593b0bc9c0da0496f0abc837",
+      "deploy/deploy_mujoco/test_corridor_navigation.py": "4dbfb4c63511f34ff0057fb25c43079555a90c70d2a1875a5fc767927fe4b1a2",
+      "deploy/deploy_mujoco/test_high_level_navigation.py": "d463cfd4817741cf1ad32a55ad4dcf00510091966c4e2db976919bf9dd9e094d",
+      "deploy/deploy_mujoco/test_motion_sweep.py": "35437935e1561704befa278374010e10600f291752269a0c9c02bf572a480c99",
+      "deploy/deploy_mujoco/test_navigation_geometry.py": "e5e2d7e842429317d0a845786208144849ff2a64ceb72e5550d0cba08c954b8f",
+      "deploy/deploy_mujoco/test_ros2_vslam_bridge.py": "80597c8758ff1494562a2a511ed0550ba257829b71d2dd2fe22a90fe487aa5ad",
+      "deploy/deploy_mujoco/test_stairs_headless.py": "0d5f9b10a96a26c68339182db26a366fbb3119c47fe432bd03d55226cb1dc22e",
+      "deploy/deploy_mujoco/test_terrain_navigator.py": "cfd518d633660fa9e96b2595d790358ad11243f1ac362c9c70ae71bdc3cd98a5",
+      "deploy/deploy_mujoco/test_vslam_batch.py": "29b4ca67444a777c6cf82b9926cab0f9ec1b3d41af1b647b49f597d690b1b594",
+      "deploy/deploy_mujoco/test_vslam_e2e_benchmark.py": "fa5cab66b4fad1a5438be84432a88e5c2c3962c9b34f4eb4d296b9a2810ec7a3",
+      "deploy/deploy_mujoco/test_vslam_navigation.py": "903c711e863bdd69c1d6e7403e0b2643430913fbd82fbbcb05cbf43883625c79",
+      "deploy/deploy_mujoco/test_vslam_report.py": "be5de26ad4d868a4602de6f9e190edce78c92c9dd35773fa75e04ebf87a615e6",
+      "deploy/deploy_mujoco/train_high_level_nav.py": "8262b085af5de6a4dba7147961cbfc0c226b61e3298e3011815c0f8a87597ced",
+      "deploy/deploy_mujoco/utils.py": "58e576d2c285a16b491f62e55f75c49b15177d4b879cb1731180b47ca4a2d2b4",
+      "deploy/deploy_mujoco/vslam_e2e_benchmark.py": "26b667924e5ae8cce7bec3e18a43d609562a4a32cb03ffd4dbd458c098cfaded",
+      "deploy/deploy_real/common/command_helper.py": "a06575599538967d24459645b51ac63aaab498ddb9ee4c268d5fb3b977c9a7df",
+      "deploy/deploy_real/common/remote_controller.py": "16c9e12aaaa2667426ddb90ef89d124f9d4d4a8a6c8b42196ebfea85ddc0b785",
+      "deploy/deploy_real/common/rotation_helper.py": "236cdb548d8a69f9abf2ec064ce961c502c02f9ab28500f7c88209925448489d",
+      "deploy/deploy_real/config_go2.py": "881073f49fb3e11e24a62d544d023a104c219d712265bc93ac7c813e26984b97",
+      "deploy/deploy_real/configs/go2.yaml": "233fe98aaff3280f8f1ec6c42e51def33b7abe2ecba4cc3c14b57292606af382",
+      "deploy/deploy_real/deploy_real_go2.py": "20c02552c5aec6bb115c53cbcc01bc8a76f0c99baf4fab29d5be8f68b3dafc23",
+      "deploy/pre_train/go2/go2_cts_150k.pt": "3e102d0d5e69aebd25e071bcdd87637596561111f924b160ed5ceb0d5c70f400",
+      "deploy/pre_train/go2/go2_moe_cts_137k_0.6739.pt": "2206659a6a23886446dcfc05d86888d6cdc9b8a4e31f44cbbc4e2d17ba3d6ead",
+      "deploy/pre_train/go2/go2_moe_cts_high_slope_thre_164k_0.6715.pt": "9d9ad783a1017b6eced5984eb95279cc5b36db8cc84d21e646f46ba2a8023d9d",
+      "deploy/pre_train/go2/high_level_nav.pt": "b843fb9e694b799534a6c9150137b323791ef021998e38c5d5936d90e6802c6c",
+      "legged_gym/LICENSE": "d5b70bfeae0eb84295cff9dd7daf71e28a809eae4a1953762d491cb256dafeb6",
+      "legged_gym/__init__.py": "6a255b7f9ad90ddb96036a32e711dfe4a49dcb26c9c2e8e891417ad9edecc8f6",
+      "legged_gym/envs/__init__.py": "c1ebd13ca15fa4e7b8cdcd9e90cbef3bbc0e2de69019ae7caa57e5c3b00f72c2",
+      "legged_gym/envs/base/base_config.py": "0597eabb0aa9422240ea408e7bd3aa0ebc9ec36cc781d1e5fb26773ca3579362",
+      "legged_gym/envs/base/base_task.py": "bbfbb77ae8f90b0383af6003b554c47de75bea75b9f77e29a548cff123306330",
+      "legged_gym/envs/base/legged_robot.py": "8440d9a07e77039f82328fc572f10103c12fb23a0e72ab7a5e6123ac6417444d",
+      "legged_gym/envs/base/legged_robot_config.py": "96e302a848ad66a79383b441915790187ab7cacea64ccd6cf65230cd831b0bbe",
+      "legged_gym/envs/go2/go2_config.py": "cef4093b79823c15525cf20b198bdd6c7a8cb131f587e915626ae9bdf1d09c97",
+      "legged_gym/envs/go2/go2_config_fast_flat_move.py": "aa13e218835a5484a576c9cc1119bf9afd159e4f8643d045c94d10758e47967b",
+      "legged_gym/envs/go2/go2_config_vanilla.py": "dde2daedff703aa9ded1cda58d36b5f9604288f5909a5e599134f70742060fbf",
+      "legged_gym/envs/go2/go2_config_vanilla_with_dynamic_cmd.py": "000aa6d6d90131e988833ca222b3c5db0d6664f4a4b999f43b963076d11c55df",
+      "legged_gym/envs/go2/go2_env.py": "0179982b0e832f08503f1cfaf5e9f4301358475daa32f30a0173ab0f3308165b",
+      "legged_gym/scripts/play.py": "31dc63e966c4b7c95481a744d97935144e11098c1c3417e34b73400b3a0e7a29",
+      "legged_gym/scripts/train.py": "7b6b960ecba39602515592a1c17ba2e2bdad89c8492d0a7f211a58609fab4c39",
+      "legged_gym/utils/__init__.py": "5bb76968628706adbc845382baa2ce8173ef0c48ccc2f8109684dcb6c3fc73a6",
+      "legged_gym/utils/exporter.py": "65dfcfe8a232270bcb951debfa2b71ac7108f3b34f4d770f56e00bfad0d57c21",
+      "legged_gym/utils/helpers.py": "10ee7a59afd423e2d785df997fbca4075668ee845409eddff9779ad2fa63f6f5",
+      "legged_gym/utils/isaacgym_utils.py": "b15319d313e8e2fee6d15f12b9c02055fd138637a7c9a7abe96d954d57e3fa44",
+      "legged_gym/utils/logger.py": "14f72701f376ec0aab2d1f432de6c97a8b2d221aa39f6b90bd28edaa9282c852",
+      "legged_gym/utils/math.py": "4b2d840dd02515e236ce0cc9b21f4e0a049cb9e22a203ba93f3f253a9bd7691d",
+      "legged_gym/utils/task_registry.py": "e111c311037676ea518e25b1befb241208eccb640d444271cc4a13a0bdd03ae6",
+      "legged_gym/utils/terrain.py": "e1751824eae72f091165e8e7e442aea8eb75f2b6eec55b9796a3b65a80f7e24d",
+      "resources/robots/go2/assets/base_0.obj": "8cdc53719002a5ee737d867904e534a6d6fa930b616bdcc1b3131e577d4e46c0",
+      "resources/robots/go2/assets/base_1.obj": "39d2f4724ff64dd5a0640c308fd98902a2946660a8d033ec8dbf368fd5af0dd6",
+      "resources/robots/go2/assets/base_2.obj": "29cae463f95d678e4ede863c36c9b19b0d356b8340412add10670d70bdcc3095",
+      "resources/robots/go2/assets/base_3.obj": "f51ba43bf300e68957a0c1aa83eaf3e4926f4ac7e64a0d6c33ae5d21fcbcf5f6",
+      "resources/robots/go2/assets/base_4.obj": "49ddec0129546e5dd2075d5beacf7f207baa2860aeff7626818e64d2efbf3821",
+      "resources/robots/go2/assets/calf_0.obj": "4a818cd563c5b7e2a271504442d05fd777d38cbaa028d4a10ad29c9f87bb355e",
+      "resources/robots/go2/assets/calf_1.obj": "51950c3a153ae3208592df86ea11c9d6756f8f645ebca5caf6910c61aeb03817",
+      "resources/robots/go2/assets/calf_mirror_0.obj": "6dc0406207a1c08a5953fd5962aca1a270fd06593d30d100205e05c1b32d4af2",
+      "resources/robots/go2/assets/calf_mirror_1.obj": "f84f5af90b914633165beb3a5493ee499169144c5797dcf04c6eb5842f74b31a",
+      "resources/robots/go2/assets/foot.obj": "df9e78a7c0110d02557439010f2a5f11f0ec4fd907b32704145dbd6aa7affc0b",
+      "resources/robots/go2/assets/height_field.png": "07008d95a54dc2f602c88482342544eddf1da88fb5097b7ceb3c4a73f75d79f0",
+      "resources/robots/go2/assets/hip_0.obj": "cc29932ab4d251ce3f72389ec4c1f757e44eee138b87e772b648c2bc76b506cd",
+      "resources/robots/go2/assets/hip_1.obj": "3fd5bd9b2ef6abe622c0739d3c67eaa1679b19b47132951972c4892a779ea7cf",
+      "resources/robots/go2/assets/thigh_0.obj": "bb3edfe6a7b04f4f4dff1ce7b05d426ddce941e276cc6372fb542055893c71ec",
+      "resources/robots/go2/assets/thigh_1.obj": "3a631822f9f7d2114b1b79dcdff5abf95103630abb7d91d1f3b8b18117132ed2",
+      "resources/robots/go2/assets/thigh_mirror_0.obj": "07abaedce761f1dd48647384ac14ba1959276bc78d5a2a62051e8f1c6093933b",
+      "resources/robots/go2/assets/thigh_mirror_1.obj": "db984a3e983eabbc9b38183427cca9ab0bb3bdb049f9eab030e06edda36579d6",
+      "resources/robots/go2/assets/wood.png": "5462a14bf51dba188dbb07404ab7a4448dc70d7abbf7bf8c462d507baa392d44",
+      "resources/robots/go2/cliff_avoidance_codex.xml": "d660c18a8e9d70f7d5aadbb3770225f1ad6961124cc03a69faa0d89baca8d881",
+      "resources/robots/go2/cross_slope.xml": "f3b2f330897f219df6b243a8226ff6b4f2e9f9fee8f8d140c7b24dbdc7d4b941",
+      "resources/robots/go2/cross_stairs.xml": "1215c8a3013f175472d2b7c08357d4958fe79bdfdc09de4d1923d7c8050477fd",
+      "resources/robots/go2/dae/base.dae": "e52bebbb5c7ff1f6aedee620c9b5b349f6e965360ecc63a9bb743eeff2d0be64",
+      "resources/robots/go2/dae/calf.dae": "29872fa1a435b92bc2b395fdfa7f0aee26101db3c494681896bd4ef24ee7883c",
+      "resources/robots/go2/dae/calf_mirror.dae": "79c66be7ed06760bd5001c067a1fb0ac517f639d8b1a5f89be471903b3f359e1",
+      "resources/robots/go2/dae/foot.dae": "ffbd95fd641866ce9bd277aa249b92dafc9148d70131fa2c52709a35ce5b710b",
+      "resources/robots/go2/dae/hip.dae": "8735e10617afe252cef0844c1d139d15bc6d4c653660d742fea9fe05c2704d8f",
+      "resources/robots/go2/dae/thigh.dae": "a622381ae308897ff143b8bbf02f075457c342b22984205040424a5a983246fa",
+      "resources/robots/go2/dae/thigh_mirror.dae": "c7bae0b0565c2aa4b7cc15a538d795e9153e0f10c821cc18429e92693172bdc6",
+      "resources/robots/go2/flat.xml": "0ad2696c6c53701dbba34f1a9a2158e1c1e4f491eb114263b0f86ecadc9e40ac",
+      "resources/robots/go2/go2.xml": "6ffb30a1dd90909e9a114bb5f7ec998d800ef2c9fce7af5ca7af8fc5069c3598",
+      "resources/robots/go2/home_codex.xml": "75ceabc5ee3f791dcab4cee123794afca9bac27b5a040e91fff3ec8a93165acd",
+      "resources/robots/go2/imgs/label_1.png": "5b70b5cbd2191730ab9e33580c9ff6ce5518f19b5c71ee4a0d5a7a0cdd69b140",
+      "resources/robots/go2/imgs/label_10.png": "74c4ef761389886f034b2752806ab9acadacb7768c1c263c71a9cff50f017527",
+      "resources/robots/go2/imgs/label_4.png": "5969c2ea50a92b6ce595f7be33061b4ca412c036f1ba898dc67e6e6d16f7784d",
+      "resources/robots/go2/imgs/label_7.png": "fbd2c8e991414371f4eb719667d34986e7b203dcb614bd59e0879258a916079d",
+      "resources/robots/go2/narrow_road_codex.xml": "e594a3a3f68292e4b3ddd5a0e2c7b90328c4086dfa073b8fe94583ca7890de00",
+      "resources/robots/go2/race_track.xml": "b5f5d9995429f71e38b7b37e98588c7ac8eb035a87ea1a62931fa91d0e5cc79c",
+      "resources/robots/go2/stairs.xml": "d3e43ab7e11bf7a7320c45a5cbd42fd5991bca813452cb026da28cc8cf5ce922",
+      "resources/robots/go2/stairs_codex.xml": "4e3027450b4019b68e487db511486903d1c1890132c538d875797dda1644fee2",
+      "resources/robots/go2/urdf/go2.urdf": "4f306754e9b3d73930ac8362aa456eb8912f2e886665618e7eced9627c1704a4",
+      "resources/robots/go2/wall_avoidance_codex.xml": "b2472e61403d539599051c16975e5b9cc325496fd99f9a86b8472f0f39fb0cd5",
+      "run_vslam_e2e_benchmark.sh": "e80c69cb992b135a584b1609980d0105256e53552a367d9f989bc1efb02826b2",
+      "start_go2_vslam.sh": "5eada3074f4e9c1e2ed5f3c116c005dc2d9bc594951ad27c5c85cf51559bb780"
+    },
+    "map_sha256": "4d9a47a4a9f584350202fa89b1200f91b1a65bf3869afa522079b368fe082872",
+    "cases": [
+      {
+        "id": "order_01",
+        "order": [
+          "living_room",
+          "bedroom",
+          "kitchen"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "order_02",
+        "order": [
+          "living_room",
+          "kitchen",
+          "bedroom"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "order_03",
+        "order": [
+          "bedroom",
+          "living_room",
+          "kitchen"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "order_04",
+        "order": [
+          "bedroom",
+          "kitchen",
+          "living_room"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "order_05",
+        "order": [
+          "kitchen",
+          "living_room",
+          "bedroom"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "order_06",
+        "order": [
+          "kitchen",
+          "bedroom",
+          "living_room"
+        ],
+        "initial_yaw_deg": 0.0
+      },
+      {
+        "id": "heading_01",
+        "order": [
+          "living_room",
+          "bedroom",
+          "kitchen"
+        ],
+        "initial_yaw_deg": -30.0
+      },
+      {
+        "id": "heading_02",
+        "order": [
+          "living_room",
+          "bedroom",
+          "kitchen"
+        ],
+        "initial_yaw_deg": 30.0
+      },
+      {
+        "id": "heading_03",
+        "order": [
+          "living_room",
+          "bedroom",
+          "kitchen"
+        ],
+        "initial_yaw_deg": 60.0
+      },
+      {
+        "id": "heading_04",
+        "order": [
+          "living_room",
+          "bedroom",
+          "kitchen"
+        ],
+        "initial_yaw_deg": 180.0
+      }
+    ],
+    "wall_timeout_seconds": 900,
+    "ros_domain": 74,
+    "policy": "No retries or parameter changes during the batch; all attempts retained. Final requested yaw is always 0 degrees.",
+    "started_at": "2026-09-25T13:05:06+0800"
+  },
+  "summary": {
+    "planned_runs": 10,
+    "completed_runs": 10,
+    "passed_runs": 4,
+    "failed_runs": 6,
+    "success_rate_all_planned": 0.4,
+    "total_known_contact_episodes": 0,
+    "runs_with_contacts": 0,
+    "runs_with_unknown_contact_metrics": 0,
+    "total_stall_episodes": 1,
+    "runs_with_stalls": 1,
+    "runs_with_unknown_stall_metrics": 0,
+    "wall_seconds_all_completed": {
+      "count": 10,
+      "mean": 163.97268991330003,
+      "median": 203.60806623699955,
+      "min": 25.589925395001046,
+      "max": 301.74856375700074,
+      "p95_nearest_rank": 301.74856375700074
+    },
+    "simulation_seconds_all_completed": {
+      "count": 10,
+      "mean": 86.91599999996671,
+      "median": 111.16199999992233,
+      "min": 20.02199999999978,
+      "max": 150.02199999998822,
+      "p95_nearest_rank": 150.02199999998822
+    },
+    "failure_reasons": {
+      "timeout": 2,
+      "saved-map localization or occupancy grid unavailable": 4
+    }
+  },
+  "runs": [
+    {
+      "id": "order_01",
+      "order": [
+        "living_room",
+        "bedroom",
+        "kitchen"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 287.623460883,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": true,
+      "contact_episodes": 0,
+      "stall_episodes": 1,
+      "map_unchanged": true,
+      "simulation_seconds": 142.88199999995413,
+      "goals_reached": 4,
+      "failure_reason": null,
+      "failed_checks": []
+    },
+    {
+      "id": "order_02",
+      "order": [
+        "living_room",
+        "kitchen",
+        "bedroom"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 249.65184879599838,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": true,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 123.82199999989282,
+      "goals_reached": 4,
+      "failure_reason": null,
+      "failed_checks": []
+    },
+    {
+      "id": "order_03",
+      "order": [
+        "bedroom",
+        "living_room",
+        "kitchen"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 301.74856375700074,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 150.02199999998822,
+      "goals_reached": 3,
+      "failure_reason": "timeout",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw"
+      ]
+    },
+    {
+      "id": "order_04",
+      "order": [
+        "bedroom",
+        "kitchen",
+        "living_room"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 228.6022548509991,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": true,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 112.36199999991953,
+      "goals_reached": 4,
+      "failure_reason": null,
+      "failed_checks": []
+    },
+    {
+      "id": "order_05",
+      "order": [
+        "kitchen",
+        "living_room",
+        "bedroom"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 290.9851685909998,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 150.02199999998822,
+      "goals_reached": 3,
+      "failure_reason": "timeout",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw"
+      ]
+    },
+    {
+      "id": "order_06",
+      "order": [
+        "kitchen",
+        "bedroom",
+        "living_room"
+      ],
+      "initial_yaw_deg": 0.0,
+      "status": "completed",
+      "wall_seconds": 178.613877623,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": true,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 109.96199999992513,
+      "goals_reached": 4,
+      "failure_reason": null,
+      "failed_checks": []
+    },
+    {
+      "id": "heading_01",
+      "order": [
+        "living_room",
+        "bedroom",
+        "kitchen"
+      ],
+      "initial_yaw_deg": -30.0,
+      "status": "completed",
+      "wall_seconds": 25.636991954001132,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 20.02199999999978,
+      "goals_reached": 0,
+      "failure_reason": "saved-map localization or occupancy grid unavailable",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw",
+        "tracking_loss_observed",
+        "relocalized",
+        "recovery_time"
+      ]
+    },
+    {
+      "id": "heading_02",
+      "order": [
+        "living_room",
+        "bedroom",
+        "kitchen"
+      ],
+      "initial_yaw_deg": 30.0,
+      "status": "completed",
+      "wall_seconds": 25.63662111100166,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 20.02199999999978,
+      "goals_reached": 0,
+      "failure_reason": "saved-map localization or occupancy grid unavailable",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw",
+        "tracking_loss_observed",
+        "relocalized",
+        "recovery_time"
+      ]
+    },
+    {
+      "id": "heading_03",
+      "order": [
+        "living_room",
+        "bedroom",
+        "kitchen"
+      ],
+      "initial_yaw_deg": 60.0,
+      "status": "completed",
+      "wall_seconds": 25.589925395001046,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 20.02199999999978,
+      "goals_reached": 0,
+      "failure_reason": "saved-map localization or occupancy grid unavailable",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw",
+        "tracking_loss_observed",
+        "relocalized",
+        "recovery_time"
+      ]
+    },
+    {
+      "id": "heading_04",
+      "order": [
+        "living_room",
+        "bedroom",
+        "kitchen"
+      ],
+      "initial_yaw_deg": 180.0,
+      "status": "completed",
+      "wall_seconds": 25.638186171998314,
+      "exit_code": 0,
+      "wall_timeout": false,
+      "passed": false,
+      "contact_episodes": 0,
+      "stall_episodes": 0,
+      "map_unchanged": true,
+      "simulation_seconds": 20.02199999999978,
+      "goals_reached": 0,
+      "failure_reason": "saved-map localization or occupancy grid unavailable",
+      "failed_checks": [
+        "localization_finished",
+        "all_goals_reached",
+        "return_position",
+        "return_yaw",
+        "tracking_loss_observed",
+        "relocalized",
+        "recovery_time"
+      ]
+    }
+  ]
+}
