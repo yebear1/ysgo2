@@ -150,6 +150,17 @@ def main():
         assert benchmark.failed_reason == "saved-map localization or occupancy grid unavailable"
 
     source = Path(__file__).with_name("vslam_e2e_benchmark.py").read_text()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        benchmark._pending_goal_index = 3
+        assert benchmark.heading_command(np.array([1.0, 0.0, 1.1])) is None
+        command = benchmark.heading_command(np.array([-0.05, -0.20, 1.1]))
+        assert np.allclose(command[:2], 0) and command[2] < 0
+        # Hysteresis retains alignment until four degrees, without declaring
+        # the position goal reached or consulting any scoring truth pose.
+        assert benchmark.heading_command(np.array([-0.05, -0.20, 0.10])) is not None
+        assert benchmark.heading_command(np.array([-0.05, -0.20, 0.01])) is None
+        assert not benchmark.finished and not benchmark.goal_results
     control_source = source[
         source.index("    def update_control") : source.index("    def observe")
     ]

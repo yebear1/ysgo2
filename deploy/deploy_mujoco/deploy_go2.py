@@ -601,6 +601,19 @@ if __name__ == "__main__":
                         else get_yaw(d.qpos[3:7])
                     )
                 )
+                command_bounds = None
+                if vslam_benchmark is not None:
+                    # Sensor-rate limits must precede the swept-path check:
+                    # clipping yaw afterwards changes the checked trajectory.
+                    speed_limits = vslam_benchmark.phase_config
+                    command_bounds = (
+                        [-float(speed_limits.get("max_reverse_speed", 0.30)),
+                         -float(speed_limits.get("max_lateral_speed", 0.25)),
+                         -float(speed_limits.get("max_yaw_rate", 0.45))],
+                        [float(speed_limits.get("max_linear_speed", 0.65)),
+                         float(speed_limits.get("max_lateral_speed", 0.25)),
+                         float(speed_limits.get("max_yaw_rate", 0.45))],
+                    )
                 cmd = navigator.update(
                     manual_cmd,
                     lidar,
@@ -610,27 +623,8 @@ if __name__ == "__main__":
                     goal_distance=(
                         goal_navigator.last_distance if goal_control else None
                     ),
+                    command_bounds=command_bounds,
                 )
-                if vslam_benchmark is not None:
-                    # Keep inter-frame image motion inside the RGB-D visual
-                    # odometry capture range.  This is a sensor constraint,
-                    # not a truth-pose correction.
-                    speed_limits = vslam_benchmark.phase_config
-                    cmd[0] = np.clip(
-                        cmd[0],
-                        -float(speed_limits.get("max_reverse_speed", 0.30)),
-                        float(speed_limits.get("max_linear_speed", 0.65)),
-                    )
-                    cmd[1] = np.clip(
-                        cmd[1],
-                        -float(speed_limits.get("max_lateral_speed", 0.25)),
-                        float(speed_limits.get("max_lateral_speed", 0.25)),
-                    )
-                    cmd[2] = np.clip(
-                        cmd[2],
-                        -float(speed_limits.get("max_yaw_rate", 0.45)),
-                        float(speed_limits.get("max_yaw_rate", 0.45)),
-                    )
                 if np.linalg.norm(cmd) < 1e-4:
                     stationary_updates += 1
                     if stationary_updates >= hold_settle_updates and not hold_active:

@@ -43,6 +43,15 @@ def main():
     escape = nav._guard_swept_motion([0, 0, 0.45], corner)
     assert np.linalg.norm(escape) > 0, escape
     assert nav._swept_motion_clear(escape, corner)
+    # Limiting yaw after validation can turn a safe arc into a collision.
+    endpoint = scan([[0.45, -0.175]])
+    bounds = ([-0.30, -0.25, -0.45], [0.65, 0.25, 0.45])
+    desired = [0.8, 0, 0.8]
+    assert nav._swept_motion_clear(desired, endpoint)
+    assert not nav._swept_motion_clear(np.clip(desired, *bounds), endpoint)
+    limited = nav._guard_swept_motion(desired, endpoint, bounds)
+    assert nav._swept_motion_clear(limited, endpoint)
+    assert np.all(limited >= bounds[0]) and np.all(limited <= bounds[1])
     print(f"rear-foot arc guarded: {corrected}; narrow straight passage remains open")
 
 

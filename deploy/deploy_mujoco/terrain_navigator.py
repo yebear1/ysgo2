@@ -468,8 +468,10 @@ class TerrainNavigator:
                 return False
         return True
 
-    def _guard_swept_motion(self, command, lidar):
+    def _guard_swept_motion(self, command, lidar, command_bounds=None):
         command = np.asarray(command, dtype=np.float32)
+        if command_bounds is not None:
+            command = np.clip(command, *command_bounds).astype(np.float32)
         if (
             not self.planar_obstacle_check
             or np.linalg.norm(command) < 1e-4
@@ -484,6 +486,8 @@ class TerrainNavigator:
         ]
         safe = []
         for candidate in candidates:
+            if command_bounds is not None:
+                candidate = np.clip(candidate, *command_bounds)
             # Removing yaw from a pure pivot produces zero. Do not let this
             # cheapest but motionless candidate beat a measured safe escape.
             if np.linalg.norm(candidate) < 1e-4:
@@ -503,14 +507,16 @@ class TerrainNavigator:
 
     def update(
         self, manual_command, lidar, yaw, autonomous=False,
-        goal_distance=None, lateral_velocity=0.0,
+        goal_distance=None, lateral_velocity=0.0, command_bounds=None,
     ):
         command = self._update(
             manual_command, lidar, yaw, autonomous, goal_distance, lateral_velocity
         )
         if not self.enabled or lidar is None:
+            if command_bounds is not None:
+                command = np.clip(command, *command_bounds).astype(np.float32)
             return command
-        return self._guard_swept_motion(command, lidar)
+        return self._guard_swept_motion(command, lidar, command_bounds)
 
     def _update(
         self,

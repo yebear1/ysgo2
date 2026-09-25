@@ -1,0 +1,75 @@
+mapping:
+  timeout: 300.0
+  initial_tracking_grace: 8.0
+  initial_tracking_timeout: 20.0
+  tracking_scan_delay: 0.5
+  tracking_scan_yaw_rate: 0.35
+  tracking_scan_period: 2.0
+  tracking_recovery_timeout: 12.0
+  max_tracking_loss_events: 8
+  # MuJoCo truth is used only by the scorer to stop an already-invalid run.
+  abort_position_drift: 5.0
+  max_linear_speed: 0.65
+  max_reverse_speed: 0.30
+  max_lateral_speed: 0.25
+  max_yaw_rate: 0.45
+  # Smaller than half the separation of doorway waypoints, so entering the
+  # door cannot also count as leaving it before the robot has cleared it.
+  waypoint_tolerance: 0.18
+  # Fail a stalled exploration waypoint instead of allowing an unstable pose
+  # to make the suite spin until the much longer whole-phase timeout.
+  waypoint_progress_step: 0.15
+  waypoint_progress_timeout: 45.0
+  # Sensor-driven exploration route. The controller follows these in the
+  # RTAB-Map frame without reading MuJoCo truth or a prebuilt occupancy map.
+  # Start in the camera's forward direction so the robot is not asked to make
+  # a blind 180-degree turn in the narrow spawn corridor.
+  waypoints:
+    - [3.0, 0.0]
+    - [5.6, 0.6]
+    # Align with, cross and clear the 1 m bedroom doorway before turning.
+    - [5.7, 1.25]
+    - [5.6, 2.30]
+    - [5.7, 1.25]
+    - [5.6, 0.6]
+    - [8.8, 0.0]
+    - [8.3, -1.1]
+    - [8.8, 0.0]
+    - [3.0, 0.0]
+    - [0.0, 0.0]
+    - [-2.0, 0.0]
+    - [-2.0, 2.2]
+    - [0.0, 0.0]
+
+localization:
+  timeout: 150.0
+  # Leave margin for estimation error inside the 0.25 m physical criterion.
+  goal_tolerance: 0.15
+  initial_tracking_grace: 8.0
+  initial_tracking_timeout: 20.0
+  tracking_scan_delay: 0.3
+  tracking_scan_yaw_rate: 0.35
+  tracking_scan_period: 2.0
+  tracking_recovery_timeout: 5.0
+  max_tracking_loss_events: 6
+  abort_position_drift: 5.0
+  max_linear_speed: 0.65
+  max_reverse_speed: 0.30
+  max_lateral_speed: 0.25
+  max_yaw_rate: 0.45
+  goals:
+    - {name: living_room, position: [-2.0, 2.2]}
+    - {name: bedroom, position: [5.0, 3.0]}
+    - {name: kitchen, position: [8.8, -0.1]}
+    - {name: start, position: [0.0, 0.0], yaw: 0.0}
+  occlusion_after_goal: bedroom
+  occlusion_duration: 2.5
+  recovery_timeout: 5.0
+
+thresholds:
+  all_goals_reached: true
+  max_contact_episodes: 0
+  return_position_error: 0.25
+  return_yaw_error_deg: 10.0
+  recovery_time: 5.0
+  minimum_loop_closures: 1

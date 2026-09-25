@@ -55,6 +55,7 @@ class VslamE2EBenchmark:
         self._last_pose_ready = False
         self.direct_target = None
         self.direct_yaw = None
+        self._approach_heading_active = False
         self._last_goal_reached = False
         self.goal_results = []
         self.camera_blocked = False
@@ -375,9 +376,32 @@ class VslamE2EBenchmark:
         return np.array([0.0, 0.0, direction * yaw_rate], dtype=np.float32)
 
     def heading_command(self, global_pose, max_yaw_rate=0.9):
-        if self.direct_yaw is None or global_pose is None:
+        if global_pose is None:
             return None
-        error = angle_difference(self.direct_yaw, float(global_pose[2]))
+        target_yaw = self.direct_yaw
+        if target_yaw is None and self.phase == "localization":
+            goals = self.phase_config["goals"]
+            if self._pending_goal_index < len(goals):
+                goal = goals[self._pending_goal_index]
+                requested_yaw = goal.get("yaw")
+                distance = np.linalg.norm(np.asarray(goal["position"]) - global_pose[:2])
+                if requested_yaw is not None and distance < 0.45:
+                    error = angle_difference(float(requested_yaw), float(global_pose[2]))
+                    if abs(error) > math.radians(10.0):
+                        self._approach_heading_active = True
+                    elif abs(error) <= math.radians(4.0):
+                        self._approach_heading_active = False
+                    if self._approach_heading_active:
+                        # Honour the requested goal pose BEFORE entering the
+                        # final pocket, not only after declaring XY reached.
+                        # This still passes through measured motion-sweep
+                        # protection and never marks the goal reached early.
+                        target_yaw = float(requested_yaw)
+                else:
+                    self._approach_heading_active = False
+        if target_yaw is None:
+            return None
+        error = angle_difference(target_yaw, float(global_pose[2]))
         return np.array(
             [0.0, 0.0, np.clip(1.8 * error, -max_yaw_rate, max_yaw_rate)],
             dtype=np.float32,

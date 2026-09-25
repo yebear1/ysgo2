@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "phase": "localization",
+  "finished": true,
+  "failed_reason": null,
+  "elapsed_simulation_s": 119.96199999990182,
+  "map_updates": 1,
+  "loop_closures": 48,
+  "tracking_lost_events": 1,
+  "longest_tracking_loss_s": 2.5640000000031336,
+  "recovery_time_s": 0.1400000000001711,
+  "contact_episodes": 0,
+  "contact_events": [],
+  "max_contact_force_n": 0.0,
+  "strongest_contact": null,
+  "mean_position_drift_m": 0.048394492808023035,
+  "max_position_drift_m": 0.1436549572888321,
+  "mean_yaw_drift_deg": 1.8120678268838142,
+  "max_yaw_drift_deg": 5.679342147482788,
+  "goals": [
+    {
+      "name": "living_room",
+      "goal": [
+        -2.0,
+        2.2
+      ],
+      "truth_position_error_m": 0.09291198056477577
+    },
+    {
+      "name": "bedroom",
+      "goal": [
+        5.0,
+        3.0
+      ],
+      "truth_position_error_m": 0.14852990838878338
+    },
+    {
+      "name": "kitchen",
+      "goal": [
+        8.8,
+        -0.1
+      ],
+      "truth_position_error_m": 0.11634977532496554
+    },
+    {
+      "name": "start",
+      "goal": [
+        0.0,
+        0.0
+      ],
+      "truth_position_error_m": 0.12822836746661043
+    }
+  ],
+  "truth_final_pose": [
+    0.0580971493979453,
+    -0.11953863359546889,
+    0.02299807823242987
+  ],
+  "vslam_final_pose": [
+    0.05314385140141106,
+    -0.15642109385075353,
+    0.05934512781118189
+  ],
+  "tracking_mode": "LOOP CLOSED #48",
+  "exploration_recoveries": 0,
+  "tracking_scan_actions": 0,
+  "mapping_waypoints_reached": 0,
+  "mapping_waypoints_total": null
+}
