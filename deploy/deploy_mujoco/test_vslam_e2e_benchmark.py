@@ -149,17 +149,80 @@ def main():
         benchmark.update_control(pose, navigator, 21.0)
         assert benchmark.failed_reason == "saved-map localization or occupancy grid unavailable"
 
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        pose = np.zeros(3)
+        navigator = SimpleNamespace(map_ready=True, reached=False, active=False,
+                                    set_goal=lambda *args: True)
+        benchmark.update_control(pose, navigator, 0.0)
+        # Valid odometry and a loaded grid are NOT a verified map pose.
+        assert np.allclose(benchmark.tracking_recovery_command(pose, 0.5), 0)
+        for time in (3.1, 5.0, 10.0, 19.9):
+            benchmark.update_control(pose, navigator, time)
+            scan = benchmark.tracking_recovery_command(pose, time)
+            assert scan[2] > 0 and np.allclose(scan[:2], 0)
+            assert benchmark.direct_target is None
+        assert benchmark.initial_scan_actions == 1
+        benchmark.loop_closures = 1
+        benchmark.update_control(pose, navigator, 19.95)
+        assert benchmark.saved_map_ready
+        assert benchmark.tracking_recovery_command(pose, 19.95) is None
+        assert benchmark.consume_waypoint_change()  # Clear stale local recovery.
+        # Once localized, a later lost pose uses the original recovery budget.
+        benchmark.tracking_recovery_command(None, 21.0)
+        benchmark.tracking_recovery_command(None, 26.1)
+        assert benchmark.failed_reason == "visual tracking recovery timeout"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        benchmark.update_control(None, SimpleNamespace(map_ready=True), 0.0)
+        benchmark.tracking_recovery_command(None, 20.1)
+        assert benchmark.finished  # Missing pose cannot bypass startup timeout.
+        assert benchmark.failed_reason == "saved-map localization or occupancy grid unavailable"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        bridge = BridgeStub()
+        # An unverified odometry origin must not anchor saved-map scoring.
+        benchmark.observe(0.0, np.array([0, 0, np.pi]), np.zeros(3), None, bridge)
+        assert not benchmark.pose_errors
+        bridge.loop_closures = 1
+        benchmark.observe(1.0, np.array([0, 0, np.pi]), np.array([0.02, 0, np.pi]), None, bridge)
+        assert abs(benchmark.pose_errors[-1] - 0.02) < 1e-6
+        assert benchmark.yaw_errors[-1] == 0
+        # Incorrect matching is measured, not aligned away by the scorer.
+        benchmark.observe(1.1, np.array([0, 0, np.pi]), np.zeros(3), None, bridge)
+        assert abs(benchmark.yaw_errors[-1] - np.pi) < 1e-6
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
+        benchmark.update_control(np.zeros(3), SimpleNamespace(map_ready=True), 0.0)
+        ranges = SimpleNamespace(planar_clearance=lambda angle, width: .3 if angle > 0 else 1.0)
+        command = benchmark.tracking_recovery_command(np.zeros(3), 3.1, lidar=ranges)
+        assert command[2] < 0  # Search away from a nearby featureless face.
+        ranges.planar_clearance = lambda angle, width: 1.0 if angle > 0 else .3
+        command = benchmark.tracking_recovery_command(np.zeros(3), 4.0, lidar=ranges)
+        assert command[2] < 0  # Keep direction instead of oscillating every scan.
+
     source = Path(__file__).with_name("vslam_e2e_benchmark.py").read_text()
     with tempfile.TemporaryDirectory() as tmpdir:
         benchmark = VslamE2EBenchmark(config_path, "localization", Path(tmpdir) / "x.json")
         benchmark._pending_goal_index = 3
+        benchmark.saved_map_ready = True
         assert benchmark.heading_command(np.array([1.0, 0.0, 1.1])) is None
         command = benchmark.heading_command(np.array([-0.05, -0.20, 1.1]))
         assert np.allclose(command[:2], 0) and command[2] < 0
         # Hysteresis retains alignment until four degrees, without declaring
         # the position goal reached or consulting any scoring truth pose.
         assert benchmark.heading_command(np.array([-0.05, -0.20, 0.10])) is not None
-        assert benchmark.heading_command(np.array([-0.05, -0.20, 0.01])) is None
+        approach = benchmark.heading_command(np.array([-0.05, -0.20, 0.01]))
+        assert approach[1] > 0 and abs(approach[2]) < 0.03
+        # No handoff to PPO in the former 0.40--0.45 m gap, even if
+        # localization jitter moves the point outside the entry radius.
+        for distance in (0.42, 0.46, 0.66, 0.42):
+            approach = benchmark.heading_command(np.array([0, -distance, 0.05]))
+            assert approach[1] > 0 and approach[2] < 0
+        assert benchmark.heading_command(np.array([0.01, -0.01, 0.01])) is None
         assert not benchmark.finished and not benchmark.goal_results
     control_source = source[
         source.index("    def update_control") : source.index("    def observe")

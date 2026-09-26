@@ -539,7 +539,7 @@ if __name__ == "__main__":
                     and vslam_benchmark.direct_target is not None
                 )
                 benchmark_heading = (
-                    vslam_benchmark.heading_command(global_pose)
+                    vslam_benchmark.heading_command(global_pose, local_velocity=navigation_velocity)
                     if vslam_benchmark is not None else None
                 )
                 benchmark_recovery = (

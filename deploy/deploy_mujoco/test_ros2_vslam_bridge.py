@@ -28,6 +28,9 @@ class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.bridge = Ros2VslamBridge.__new__(Ros2VslamBridge)
         b = self.bridge
+        b._pending_map_correction = None
+        b._map_match_not_before_ns = 0
+        b._verified_map_match = False
         b._sensor_time_ns = 10_000_000_000
         b._last_odom_stamp_ns = 9_900_000_000
         b._odometry_lost = False
@@ -50,6 +53,33 @@ class BridgeTests(unittest.TestCase):
         self.tf = transform(10.0, 0.7)
         self.bridge._update_global_pose()
         self.assertAlmostEqual(self.bridge.global_pose[2], 0.7)
+
+    def test_match_notification_waits_for_its_corrected_tf(self):
+        b = self.bridge
+        b.loop_closures = 0
+        b._last_loop_closure_id = 0
+        expected = transform(10, math.pi).transform
+        expected.translation.z = 0.0
+        old = transform(10, 0.0).transform
+        old.translation.z = 0.0
+        map_tf = NS(transform=old)
+        b.tf_buffer = NS(lookup_transform=lambda target, source, *args, **kwargs:
+                         map_tf if source == "odom" else self.tf)
+        b._info_callback(NS(loop_closure_id=123, proximity_detection_id=0,
+                            odom_cache=NS(map_to_odom=expected)))
+        self.assertIsNone(b.global_pose)
+        b._update_global_pose()
+        self.assertIsNone(b.global_pose)  # Fresh but uncorrected TF is unsafe.
+        self.assertFalse(b._verified_map_match)
+        map_tf.transform = expected
+        b._update_global_pose()
+        self.assertIsNone(b.global_pose)
+        b._sensor_time_ns += 500_000_000
+        b._last_odom_stamp_ns = b._sensor_time_ns
+        self.tf = transform(10.5, math.pi)
+        b._update_global_pose()
+        self.assertTrue(b._verified_map_match)
+        self.assertIsNotNone(b.global_pose)
 
     def test_navigation_velocity_comes_from_visual_odometry(self):
         self.bridge._odom_callback(NS(

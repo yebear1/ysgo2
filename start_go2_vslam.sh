@@ -58,11 +58,14 @@ localization=false
 memory_args="--Mem/IncrementalMemory true"
 if [[ "$mode" == "localization" ]]; then
   localization=true
+  # The startup heading is unknown. Search candidates across the full circle;
+  # feature inlier and graph-error checks still decide whether a match is valid.
   memory_args="--Mem/IncrementalMemory false \
 --Mem/InitWMWithAllNodes true \
 --Mem/LocalizationReadOnly true \
 --RGBD/LocalizationPriorError 0.03 \
---RGBD/ProximityMaxPaths 1 \
+--RGBD/ProximityMaxPaths 0 \
+--RGBD/ProximityAngle 180 \
 --RGBD/StartAtOrigin true"
 fi
 

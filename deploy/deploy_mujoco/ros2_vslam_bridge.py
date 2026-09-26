@@ -74,6 +74,9 @@ class Ros2VslamBridge:
         self.map_updates = 0
         self.loop_closures = 0
         self._last_loop_closure_id = 0
+        self._pending_map_correction = None
+        self._map_match_not_before_ns = 0
+        self._verified_map_match = False
         self._odometry_lost = True
         self._imu_map_yaw_offset = None
         self._global_pose = None
@@ -375,6 +378,12 @@ class Ros2VslamBridge:
             self.loop_closures += 1
             self._last_loop_closure_id = accepted_id
             self.tracking_mode = f"LOOP CLOSED #{self.loop_closures}"
+            if not self._verified_map_match:
+                # Info and TF arrive independently. A match notification must
+                # not authorize the old odometry-origin map transform.
+                self._pending_map_correction = message.odom_cache.map_to_odom
+                self._map_match_not_before_ns = self._sensor_time_ns + int(self.pose_timeout * 1e9)
+                self._global_pose = None
 
     def _goal_callback(self, message):
         if message.header.frame_id not in ("", self.map_frame_id):
@@ -400,6 +409,29 @@ class Ros2VslamBridge:
         )
 
     def _update_global_pose(self):
+        if self._pending_map_correction is not None:
+            self._global_pose = None
+            if self._sensor_time_ns < self._map_match_not_before_ns:
+                return
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    self.map_frame_id, "odom", self._Time(),
+                    timeout=self._Duration(seconds=0.0),
+                ).transform
+            except Exception:
+                return
+            expected = self._pending_map_correction
+            translation_error = sum((getattr(transform.translation, axis) -
+                                     getattr(expected.translation, axis)) ** 2
+                                    for axis in ("x", "y", "z"))
+            q = np.array([getattr(transform.rotation, axis) for axis in ("x", "y", "z", "w")])
+            target = np.array([getattr(expected.rotation, axis) for axis in ("x", "y", "z", "w")])
+            norm = np.linalg.norm(q) * np.linalg.norm(target)
+            if translation_error > 1e-6 or norm < 0.5 or abs(np.dot(q, target) / norm) < 1.0 - 1e-6:
+                self.tracking_mode = "WAITING FOR VERIFIED MAP TF"
+                return
+            self._pending_map_correction = None
+            self._verified_map_match = True
         if self._odometry_lost:
             self._global_pose = None
             self.tracking_mode = "VISUAL TRACKING LOST"
@@ -588,6 +620,11 @@ class Ros2VslamBridge:
         if self.reset_odom_client.service_is_ready():
             self.reset_odom_client.call_async(self._Empty.Request())
         self._global_pose = None
+        self._pending_map_correction = None
+        self._map_match_not_before_ns = 0
+        self._verified_map_match = False
+        self._last_loop_closure_id = 0
+        self.loop_closures = 0
         self._imu_map_yaw_offset = None
         self._odometry_lost = True
         self._last_odom_stamp_ns = None

@@ -56,6 +56,7 @@ class VslamE2EBenchmark:
         self.direct_target = None
         self.direct_yaw = None
         self._approach_heading_active = False
+        self._terminal_goal_index = None
         self._last_goal_reached = False
         self.goal_results = []
         self.camera_blocked = False
@@ -77,6 +78,11 @@ class VslamE2EBenchmark:
         self.recovery_actions = 0
         self._pose_missing_since = None
         self._initial_pose_seen = False
+        self.saved_map_ready = False
+        self.saved_map_matched_at = None
+        self.initial_scan_actions = 0
+        self._initial_scan_active = False
+        self._initial_scan_direction = None
         self.tracking_scan_actions = 0
         self._tracking_scan_active = False
         self._last_tracking_yaw = None
@@ -181,13 +187,17 @@ class VslamE2EBenchmark:
         # A TF tree may be available before the saved grid has arrived or
         # before RTAB-Map has matched a frame against the saved database.
         # Neither state is yet sufficient to plan in the persistent map.
-        if not goal_navigator.map_ready or self.loop_closures == 0:
+        self.saved_map_ready = bool(goal_navigator.map_ready and self.loop_closures > 0)
+        if not self.saved_map_ready:
             self.direct_target = None
             if elapsed > float(self.phase_config.get("initial_tracking_timeout", 20.0)):
                 self.failed_reason = "saved-map localization or occupancy grid unavailable"
                 self.finished = True
             return
 
+        if self.saved_map_matched_at is None:
+            self.saved_map_matched_at = float(simulation_time)
+            self._waypoint_changed = True
         goals = self.phase_config["goals"]
         if goal_navigator.reached and not self._last_goal_reached:
             self._record_goal(goal_navigator)
@@ -211,7 +221,7 @@ class VslamE2EBenchmark:
                 return
 
         if self._pending_goal_index >= len(goals):
-            final_yaw = goals[-1].get("yaw")
+            final_yaw = goals[-1].get("yaw") if goals else None
             if final_yaw is not None:
                 error = angle_difference(float(final_yaw), float(global_pose[2]))
                 if abs(error) > math.radians(4.0):
@@ -303,6 +313,34 @@ class VslamE2EBenchmark:
         if self.finished:
             return None
         now = float(simulation_time)
+        if self.phase == "localization" and not self.saved_map_ready:
+            # Odometry is only a relative frame until a geometrically accepted
+            # saved-map match arrives. Do not reset this search on every valid
+            # odometry frame or keep revisiting the same unrecognized view.
+            elapsed = self._elapsed(now)
+            if elapsed > float(self.phase_config.get("initial_tracking_timeout", 20.0)):
+                self.failed_reason = "saved-map localization or occupancy grid unavailable"
+                self.finished = True
+                return np.zeros(3, dtype=np.float32)
+            if elapsed < float(self.phase_config.get("initial_map_scan_delay", 3.0)):
+                return np.zeros(3, dtype=np.float32)
+            if self._initial_scan_direction is None:
+                self._initial_scan_direction = 1.0
+                if lidar is not None:
+                    left = lidar.planar_clearance(math.pi / 4, math.pi / 6)
+                    right = lidar.planar_clearance(-math.pi / 4, math.pi / 6)
+                    if right > left + 0.05:
+                        self._initial_scan_direction = -1.0
+            if not self._initial_scan_active:
+                self.initial_scan_actions += 1
+                self._initial_scan_active = True
+                print("VSLAM initial saved-map search: scanning for a verified match")
+            # One continuous sweep covers views outside the old +/-0.6 rad
+            # recovery cone, including an initially reversed camera. The
+            # normal measured-range and motion-sweep guards still apply.
+            rate = min(float(self.phase_config.get("initial_map_scan_yaw_rate", 0.45)),
+                       float(self.phase_config.get("max_yaw_rate", 0.45)))
+            return np.array([0.0, 0.0, self._initial_scan_direction * rate], dtype=np.float32)
         if global_pose is not None:
             if sensor_yaw is not None:
                 self._last_tracking_yaw = float(sensor_yaw)
@@ -375,8 +413,8 @@ class VslamE2EBenchmark:
             return np.array([0.0, 0.0, direction], dtype=np.float32)
         return np.array([0.0, 0.0, direction * yaw_rate], dtype=np.float32)
 
-    def heading_command(self, global_pose, max_yaw_rate=0.9):
-        if global_pose is None:
+    def heading_command(self, global_pose, max_yaw_rate=0.9, local_velocity=None):
+        if global_pose is None or (self.phase == "localization" and not self.saved_map_ready):
             return None
         target_yaw = self.direct_yaw
         if target_yaw is None and self.phase == "localization":
@@ -384,21 +422,34 @@ class VslamE2EBenchmark:
             if self._pending_goal_index < len(goals):
                 goal = goals[self._pending_goal_index]
                 requested_yaw = goal.get("yaw")
-                distance = np.linalg.norm(np.asarray(goal["position"]) - global_pose[:2])
-                if requested_yaw is not None and distance < 0.45:
-                    error = angle_difference(float(requested_yaw), float(global_pose[2]))
-                    if abs(error) > math.radians(10.0):
+                delta = np.asarray(goal["position"]) - global_pose[:2]
+                distance = float(np.linalg.norm(delta))
+                if self._terminal_goal_index != self._pending_goal_index:
+                    self._approach_heading_active = False
+                    self._terminal_goal_index = self._pending_goal_index
+                if requested_yaw is not None:
+                    if distance < 0.65:
                         self._approach_heading_active = True
-                    elif abs(error) <= math.radians(4.0):
+                    elif distance > 0.90:
                         self._approach_heading_active = False
                     if self._approach_heading_active:
-                        # Honour the requested goal pose BEFORE entering the
-                        # final pocket, not only after declaring XY reached.
-                        # This still passes through measured motion-sweep
-                        # protection and never marks the goal reached early.
-                        target_yaw = float(requested_yaw)
-                else:
-                    self._approach_heading_active = False
+                        # One goal-pose controller owns the complete terminal
+                        # approach. The old 0.45m yaw / 0.40m XY thresholds
+                        # handed control back to PPO in between, repeatedly
+                        # turning towards the point after aligning to goal yaw.
+                        error = angle_difference(float(requested_yaw), float(global_pose[2]))
+                        tolerance = float(self.phase_config.get("goal_tolerance", 0.15))
+                        if distance <= tolerance and abs(error) <= math.radians(4.0):
+                            return None  # Let the navigator verify XY arrival.
+                        command = np.zeros(3, dtype=np.float32)
+                        command[2] = np.clip(1.8 * error, -max_yaw_rate, max_yaw_rate)
+                        if abs(error) <= math.radians(10.0):
+                            c, s = math.cos(global_pose[2]), math.sin(global_pose[2])
+                            local_error = np.array([c * delta[0] + s * delta[1],
+                                                    -s * delta[0] + c * delta[1]])
+                            velocity = np.zeros(2) if local_velocity is None else np.asarray(local_velocity)[:2]
+                            command[:2] = np.clip(0.8 * local_error - 0.15 * velocity, -0.20, 0.20)
+                        return command
         if target_yaw is None:
             return None
         error = angle_difference(target_yaw, float(global_pose[2]))
@@ -452,9 +503,11 @@ class VslamE2EBenchmark:
                 "control": control_diagnostics,
                 "active_goal_index": self._pending_goal_index,
                 "camera_blocked": self.camera_blocked,
+                "saved_map_ready": self.saved_map_ready,
+                "loop_closures": self.loop_closures,
             })
 
-        if global_pose is not None:
+        if global_pose is not None and (self.phase == "mapping" or self.loop_closures > 0):
             global_pose = np.asarray(global_pose, dtype=np.float64)
             if self.initial_truth is None:
                 self.initial_truth = truth_pose.copy()
@@ -465,8 +518,16 @@ class VslamE2EBenchmark:
             predicted = self.initial_truth[:2] + rotation @ (
                 global_pose[:2] - self.initial_vslam[:2]
             )
-            self.pose_errors.append(float(np.linalg.norm(predicted - truth_pose[:2])))
             predicted_yaw = global_pose[2] + yaw_offset
+            if self.phase == "localization":
+                # The saved benchmark map already defines the target frame.
+                # Re-anchoring on a startup odometry-origin pose can turn a
+                # correct 180-degree relocalization into artificial drift.
+                # Score absolute saved-map errors, without rotating away an
+                # incorrect localization. This never feeds back into control.
+                predicted = global_pose[:2]
+                predicted_yaw = global_pose[2]
+            self.pose_errors.append(float(np.linalg.norm(predicted - truth_pose[:2])))
             self.yaw_errors.append(abs(angle_difference(predicted_yaw, truth_pose[2])))
             if (
                 self._last_diagnostic_time is None
@@ -560,6 +621,8 @@ class VslamE2EBenchmark:
             "tracking_mode": bridge.tracking_mode,
             "exploration_recoveries": self.recovery_actions,
             "tracking_scan_actions": self.tracking_scan_actions,
+            "initial_map_scan_actions": self.initial_scan_actions,
+            "saved_map_matched_at_s": self.saved_map_matched_at,
             "mapping_waypoints_reached": self._mapping_index,
             "mapping_waypoints_total": (
                 len(self.phase_config.get("waypoints", []))
