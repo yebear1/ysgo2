@@ -505,6 +505,16 @@ class Ros2VslamBridge:
         return None if self._global_pose is None else self._global_pose.copy()
 
     @property
+    def map_match_verified(self):
+        return self._verified_map_match
+
+    @property
+    def global_pose_timestamp(self):
+        if self._global_pose is None or self._last_pose_stamp_ns is None:
+            return None
+        return self._last_pose_stamp_ns / 1e9
+
+    @property
     def sensor_yaw(self):
         """Gyro-integrated yaw, aligned to the map when alignment is known."""
         iw, ix, iy, iz = self._imu_orientation

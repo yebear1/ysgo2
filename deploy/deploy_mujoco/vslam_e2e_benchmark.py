@@ -3,6 +3,9 @@
 import json
 import math
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from navigation.terminal_control import terminal_command
 
 import numpy as np
 import yaml
@@ -422,34 +425,15 @@ class VslamE2EBenchmark:
             if self._pending_goal_index < len(goals):
                 goal = goals[self._pending_goal_index]
                 requested_yaw = goal.get("yaw")
-                delta = np.asarray(goal["position"]) - global_pose[:2]
-                distance = float(np.linalg.norm(delta))
                 if self._terminal_goal_index != self._pending_goal_index:
                     self._approach_heading_active = False
                     self._terminal_goal_index = self._pending_goal_index
-                if requested_yaw is not None:
-                    if distance < 0.65:
-                        self._approach_heading_active = True
-                    elif distance > 0.90:
-                        self._approach_heading_active = False
-                    if self._approach_heading_active:
-                        # One goal-pose controller owns the complete terminal
-                        # approach. The old 0.45m yaw / 0.40m XY thresholds
-                        # handed control back to PPO in between, repeatedly
-                        # turning towards the point after aligning to goal yaw.
-                        error = angle_difference(float(requested_yaw), float(global_pose[2]))
-                        tolerance = float(self.phase_config.get("goal_tolerance", 0.15))
-                        if distance <= tolerance and abs(error) <= math.radians(4.0):
-                            return None  # Let the navigator verify XY arrival.
-                        command = np.zeros(3, dtype=np.float32)
-                        command[2] = np.clip(1.8 * error, -max_yaw_rate, max_yaw_rate)
-                        if abs(error) <= math.radians(10.0):
-                            c, s = math.cos(global_pose[2]), math.sin(global_pose[2])
-                            local_error = np.array([c * delta[0] + s * delta[1],
-                                                    -s * delta[0] + c * delta[1]])
-                            velocity = np.zeros(2) if local_velocity is None else np.asarray(local_velocity)[:2]
-                            command[:2] = np.clip(0.8 * local_error - 0.15 * velocity, -0.20, 0.20)
-                        return command
+                command, self._approach_heading_active = terminal_command(
+                    global_pose, goal["position"], requested_yaw, local_velocity,
+                    self._approach_heading_active,
+                    float(self.phase_config.get("goal_tolerance", 0.15)), max_yaw_rate)
+                if requested_yaw is not None and self._approach_heading_active:
+                    return command
         if target_yaw is None:
             return None
         error = angle_difference(target_yaw, float(global_pose[2]))

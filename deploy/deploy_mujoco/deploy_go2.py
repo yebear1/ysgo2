@@ -10,6 +10,7 @@ from goal_navigator import GoalNavigator
 from high_level_nav_policy import HighLevelNavigationPolicy
 from ros2_vslam_bridge import Ros2VslamBridge
 from vslam_e2e_benchmark import VslamE2EBenchmark
+from shared_navigation import SharedNavigationSession
 
 import os
 import signal
@@ -218,7 +219,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vslam-benchmark-config")
     parser.add_argument("--vslam-benchmark-output")
+    parser.add_argument("--shared-navigation", action="store_true",
+                        help="Opt-in low-speed shared runtime; requires VSLAM and range scans.")
     args = parser.parse_args()
+    if args.shared_navigation and (not args.ros2_vslam or args.vslam_benchmark_phase):
+        parser.error("--shared-navigation requires --ros2-vslam and a separate, non-benchmark run")
     if args.headless and args.save_video:
         parser.error("--save-video requires the desktop viewer")
     save_video = args.save_video
@@ -399,6 +404,12 @@ if __name__ == "__main__":
             vslam_benchmark.finished = True
         signal.signal(signal.SIGTERM, stop_benchmark)
         signal.signal(signal.SIGINT, stop_benchmark)
+    shared_session = None
+    if args.shared_navigation:
+        if lidar is None:
+            raise RuntimeError("Shared navigation requires planar range scans")
+        shared_session = SharedNavigationSession(lambda: float(d.time), goal_navigation_config)
+        goal_navigator = shared_session.runtime.planner
     pending_goal_name = None
     pending_goal_coordinates = args.goal if ros2_vslam is not None else None
     
@@ -474,6 +485,11 @@ if __name__ == "__main__":
                     privileged_builder.reset(d.qvel[6:])
                 navigator.reset()
                 goal_navigator.cancel()
+                if shared_session is not None:
+                    shared_session.runtime.cancel("simulation_reset")
+                    shared_session = SharedNavigationSession(lambda: float(d.time), goal_navigation_config)
+                    goal_navigator = shared_session.runtime.planner
+                    pending_goal_coordinates = pending_goal_name = None
                 high_level_navigator.reset()
                 if lidar is not None:
                     lidar.scan()
@@ -496,144 +512,167 @@ if __name__ == "__main__":
             if ros2_vslam is not None:
                 map_update = ros2_vslam.take_navigation_map()
                 if map_update is not None:
-                    goal_navigator.update_occupancy_grid(map_update)
+                    if shared_session is not None:
+                        shared_session.update_map(map_update)
+                    else:
+                        goal_navigator.update_occupancy_grid(map_update)
                 rviz_goal = ros2_vslam.take_navigation_goal()
                 if rviz_goal is not None:
                     pending_goal_coordinates = rviz_goal
                     pending_goal_name = None
             show_str = f"Speed: Vx={local_vel[0]:.2f}, Vy={local_vel[1]:.2f}, Wz={local_ang_vel[2]:.2f}, "
             if counter % control_decimation == 0:
-                if vslam_benchmark is not None:
-                    vslam_benchmark.update_control(
-                        global_pose, goal_navigator, d.time
-                    )
-                    if vslam_benchmark.consume_waypoint_change():
-                        navigator.reset()
-                        high_level_navigator.reset()
-                if keyboard.goal_cancel_requested:
-                    goal_navigator.cancel()
-                    keyboard.goal_cancel_requested = False
-                if keyboard.goal_request is not None:
-                    if ros2_vslam is None:
-                        goal_navigator.set_named_goal(
-                            keyboard.goal_request, d.qpos[:2], d.time
-                        )
-                    else:
+                if shared_session is not None:
+                    if keyboard.goal_request is not None:
                         pending_goal_name = keyboard.goal_request
-                    keyboard.goal_request = None
-
-                if global_pose is not None and goal_navigator.map_ready:
-                    if pending_goal_coordinates is not None:
-                        goal_navigator.set_goal(
-                            pending_goal_coordinates, global_pose[:2], d.time
-                        )
-                        pending_goal_coordinates = None
+                        keyboard.goal_request = None
                     if pending_goal_name is not None:
-                        goal_navigator.set_named_goal(
-                            pending_goal_name, global_pose[:2], d.time
-                        )
+                        pending_goal_coordinates = goal_navigator.presets.get(pending_goal_name)
                         pending_goal_name = None
-
-                benchmark_direct = (
-                    vslam_benchmark is not None
-                    and vslam_benchmark.direct_target is not None
-                )
-                benchmark_heading = (
-                    vslam_benchmark.heading_command(global_pose, local_velocity=navigation_velocity)
-                    if vslam_benchmark is not None else None
-                )
-                benchmark_recovery = (
-                    vslam_benchmark.recovery_command(navigator.state, d.time)
-                    if vslam_benchmark is not None else None
-                )
-                benchmark_tracking_recovery = (
-                    vslam_benchmark.tracking_recovery_command(
-                        global_pose, d.time, ros2_vslam.sensor_yaw, lidar
-                    )
-                    if vslam_benchmark is not None else None
-                )
-                goal_control = goal_navigator.active or benchmark_direct or (
-                    benchmark_heading is not None
-                )
-                if benchmark_tracking_recovery is not None:
-                    goal_control = False
-                    manual_cmd = benchmark_tracking_recovery
-                elif benchmark_recovery is not None:
-                    navigator.reset()
-                    goal_control = False
-                    manual_cmd = benchmark_recovery
-                elif benchmark_heading is not None:
-                    manual_cmd = benchmark_heading
-                elif benchmark_direct:
-                    if global_pose is None:
-                        manual_cmd = np.zeros(3, dtype=np.float32)
-                    else:
-                        manual_cmd = high_level_navigator.command(
-                            vslam_benchmark.direct_target,
-                            global_pose[:2], global_pose[2],
-                            navigation_velocity,
-                            lidar,
+                    if pending_goal_coordinates is not None:
+                        shared_session.request_goal(pending_goal_coordinates)
+                        pending_goal_coordinates = None
+                    operator_cmd = (get_xbox_command(joystick, config["max_cmd"])
+                                    if use_joystick else keyboard.command.copy())
+                    takeover = keyboard.goal_cancel_requested or np.any(operator_cmd != 0)
+                    decision = shared_session.step(
+                        ros2_vslam, lidar, manual=operator_cmd if takeover else None,
+                        cancel=keyboard.goal_cancel_requested)
+                    keyboard.goal_cancel_requested = False
+                    cmd = np.asarray(shared_session.sink.velocity, dtype=np.float32)
+                    goal_control = decision.source == 'autonomy'
+                else:
+                    if vslam_benchmark is not None:
+                        vslam_benchmark.update_control(
+                            global_pose, goal_navigator, d.time
                         )
-                elif goal_control:
-                    if global_pose is None:
-                        # Do not dead-reckon a global route from MuJoCo truth if
-                        # visual tracking is temporarily lost.
-                        manual_cmd = np.zeros(3, dtype=np.float32)
-                    else:
-                        manual_cmd = goal_navigator.update(
-                            global_pose[:2], global_pose[2], d.time
-                        )
-                        if high_level_navigator.enabled and goal_navigator.active:
-                            waypoint_index = min(
-                                goal_navigator.waypoint_index,
-                                len(goal_navigator.path) - 1,
+                        if vslam_benchmark.consume_waypoint_change():
+                            navigator.reset()
+                            high_level_navigator.reset()
+                    if keyboard.goal_cancel_requested:
+                        goal_navigator.cancel()
+                        keyboard.goal_cancel_requested = False
+                    if keyboard.goal_request is not None:
+                        if ros2_vslam is None:
+                            goal_navigator.set_named_goal(
+                                keyboard.goal_request, d.qpos[:2], d.time
                             )
-                            learned_command = high_level_navigator.command(
-                                goal_navigator.path[waypoint_index],
-                                global_pose[:2],
-                                global_pose[2],
+                        else:
+                            pending_goal_name = keyboard.goal_request
+                        keyboard.goal_request = None
+
+                    if global_pose is not None and goal_navigator.map_ready:
+                        if pending_goal_coordinates is not None:
+                            goal_navigator.set_goal(
+                                pending_goal_coordinates, global_pose[:2], d.time
+                            )
+                            pending_goal_coordinates = None
+                        if pending_goal_name is not None:
+                            goal_navigator.set_named_goal(
+                                pending_goal_name, global_pose[:2], d.time
+                            )
+                            pending_goal_name = None
+
+                    benchmark_direct = (
+                        vslam_benchmark is not None
+                        and vslam_benchmark.direct_target is not None
+                    )
+                    benchmark_heading = (
+                        vslam_benchmark.heading_command(global_pose, local_velocity=navigation_velocity)
+                        if vslam_benchmark is not None else None
+                    )
+                    benchmark_recovery = (
+                        vslam_benchmark.recovery_command(navigator.state, d.time)
+                        if vslam_benchmark is not None else None
+                    )
+                    benchmark_tracking_recovery = (
+                        vslam_benchmark.tracking_recovery_command(
+                            global_pose, d.time, ros2_vslam.sensor_yaw, lidar
+                        )
+                        if vslam_benchmark is not None else None
+                    )
+                    goal_control = goal_navigator.active or benchmark_direct or (
+                        benchmark_heading is not None
+                    )
+                    if benchmark_tracking_recovery is not None:
+                        goal_control = False
+                        manual_cmd = benchmark_tracking_recovery
+                    elif benchmark_recovery is not None:
+                        navigator.reset()
+                        goal_control = False
+                        manual_cmd = benchmark_recovery
+                    elif benchmark_heading is not None:
+                        manual_cmd = benchmark_heading
+                    elif benchmark_direct:
+                        if global_pose is None:
+                            manual_cmd = np.zeros(3, dtype=np.float32)
+                        else:
+                            manual_cmd = high_level_navigator.command(
+                                vslam_benchmark.direct_target,
+                                global_pose[:2], global_pose[2],
                                 navigation_velocity,
                                 lidar,
                             )
-                            if learned_command is not None:
-                                manual_cmd = learned_command
-                elif use_joystick:
-                    manual_cmd = get_xbox_command(joystick, config["max_cmd"])
-                else:
-                    manual_cmd = keyboard.command.copy()
-                navigation_yaw = (
-                    float(global_pose[2])
-                    if global_pose is not None
-                    else (
-                        ros2_vslam.sensor_yaw
-                        if ros2_vslam is not None
-                        else get_yaw(d.qpos[3:7])
+                    elif goal_control:
+                        if global_pose is None:
+                            # Do not dead-reckon a global route from MuJoCo truth if
+                            # visual tracking is temporarily lost.
+                            manual_cmd = np.zeros(3, dtype=np.float32)
+                        else:
+                            manual_cmd = goal_navigator.update(
+                                global_pose[:2], global_pose[2], d.time
+                            )
+                            if high_level_navigator.enabled and goal_navigator.active:
+                                waypoint_index = min(
+                                    goal_navigator.waypoint_index,
+                                    len(goal_navigator.path) - 1,
+                                )
+                                learned_command = high_level_navigator.command(
+                                    goal_navigator.path[waypoint_index],
+                                    global_pose[:2],
+                                    global_pose[2],
+                                    navigation_velocity,
+                                    lidar,
+                                )
+                                if learned_command is not None:
+                                    manual_cmd = learned_command
+                    elif use_joystick:
+                        manual_cmd = get_xbox_command(joystick, config["max_cmd"])
+                    else:
+                        manual_cmd = keyboard.command.copy()
+                    navigation_yaw = (
+                        float(global_pose[2])
+                        if global_pose is not None
+                        else (
+                            ros2_vslam.sensor_yaw
+                            if ros2_vslam is not None
+                            else get_yaw(d.qpos[3:7])
+                        )
                     )
-                )
-                command_bounds = None
-                if vslam_benchmark is not None:
-                    # Sensor-rate limits must precede the swept-path check:
-                    # clipping yaw afterwards changes the checked trajectory.
-                    speed_limits = vslam_benchmark.phase_config
-                    command_bounds = (
-                        [-float(speed_limits.get("max_reverse_speed", 0.30)),
-                         -float(speed_limits.get("max_lateral_speed", 0.25)),
-                         -float(speed_limits.get("max_yaw_rate", 0.45))],
-                        [float(speed_limits.get("max_linear_speed", 0.65)),
-                         float(speed_limits.get("max_lateral_speed", 0.25)),
-                         float(speed_limits.get("max_yaw_rate", 0.45))],
+                    command_bounds = None
+                    if vslam_benchmark is not None:
+                        # Sensor-rate limits must precede the swept-path check:
+                        # clipping yaw afterwards changes the checked trajectory.
+                        speed_limits = vslam_benchmark.phase_config
+                        command_bounds = (
+                            [-float(speed_limits.get("max_reverse_speed", 0.30)),
+                             -float(speed_limits.get("max_lateral_speed", 0.25)),
+                             -float(speed_limits.get("max_yaw_rate", 0.45))],
+                            [float(speed_limits.get("max_linear_speed", 0.65)),
+                             float(speed_limits.get("max_lateral_speed", 0.25)),
+                             float(speed_limits.get("max_yaw_rate", 0.45))],
+                        )
+                    cmd = navigator.update(
+                        manual_cmd,
+                        lidar,
+                        navigation_yaw,
+                        autonomous=goal_control,
+                        lateral_velocity=float(navigation_velocity[1]),
+                        goal_distance=(
+                            goal_navigator.last_distance if goal_control else None
+                        ),
+                        command_bounds=command_bounds,
                     )
-                cmd = navigator.update(
-                    manual_cmd,
-                    lidar,
-                    navigation_yaw,
-                    autonomous=goal_control,
-                    lateral_velocity=float(navigation_velocity[1]),
-                    goal_distance=(
-                        goal_navigator.last_distance if goal_control else None
-                    ),
-                    command_bounds=command_bounds,
-                )
                 if np.linalg.norm(cmd) < 1e-4:
                     stationary_updates += 1
                     if stationary_updates >= hold_settle_updates and not hold_active:
@@ -644,7 +683,7 @@ if __name__ == "__main__":
                     hold_active = False
                 controller_label = (
                     " NAV-RL"
-                    if goal_control and high_level_navigator.enabled
+                    if shared_session is None and goal_control and high_level_navigator.enabled
                     else ""
                 )
                 show_str += (
@@ -654,7 +693,7 @@ if __name__ == "__main__":
                 if counter % (control_decimation * 50) == 0:
                     print(
                         f"{show_str}, RTF={realtime_factor:.2f}x | "
-                        f"{navigator.status_text()} | {contact_status}",
+                        f"{shared_session.runtime.gateway.last.reason if shared_session is not None else navigator.status_text()} | {contact_status}",
                         end='\r',
                     )
 
@@ -797,7 +836,7 @@ if __name__ == "__main__":
                     )
                     if lidar is not None:
                         lidar.append_point_cloud(viewer.user_scn)
-                    goal_navigator.append_path(viewer.user_scn)
+                    GoalNavigator.append_path(goal_navigator, viewer.user_scn)
                 if lidar is not None:
                     # These handle methods synchronize internally and must not
                     # be called while holding viewer.lock().
@@ -836,6 +875,8 @@ if __name__ == "__main__":
                 sys.stderr.flush()
                 os._exit(0)
 
+    if shared_session is not None:
+        shared_session.runtime.cancel("simulation_shutdown")
     # writer.close()
     if save_video:
         print(f"Video saved successfully to {video_path}")

@@ -10,6 +10,7 @@ class LidarHeightMap:
 
     def __init__(self, model, data, config):
         self.model = model
+        self.scan_stamp = None
         self.data = data
         self.base_id = model.body(config.get("body_name", "base")).id
         self.sensor_offset = np.asarray(
@@ -146,6 +147,8 @@ class LidarHeightMap:
         self._scan_planar_ring(base_pos, yaw)
         self.image = self._make_image()
         self.image_dirty = True
+
+        self.scan_stamp = float(self.data.time)
 
     def _scan_planar_ring(self, base_pos, yaw):
         """Measure walls and furniture around the complete turning envelope."""

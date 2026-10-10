@@ -23,6 +23,8 @@
 
 ## 🛠️ 使用指南
 
+没有实物时可先运行 [Go2 EDU / TX1 离线准备与故障测试](docs/GO2_OFFLINE_PREPARATION.md)。
+
 ### 1. 训练
 
 运行以下命令进行训练：
@@ -128,6 +130,8 @@ python deploy/deploy_mujoco/deploy_go2.py
 ### 4. Sim2Real
 
 #### 4.1 Python实物部署
+
+Go2 EDU + Jetson TX1 使用已有官方运控的首阶段准备，见 [TX1 连接、传感器与低速验证](docs/GO2_EDU_TX1_BRINGUP.md)。该路径不需要先安装 Torch 或启动低层 RL；以下旧流程属于自定义 RL 部署。
 
 ```bash
 # 如果机载电脑部署，根据Jetson版本选择Python版本
