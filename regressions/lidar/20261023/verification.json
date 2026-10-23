@@ -1,0 +1,94 @@
+{
+  "passed": true,
+  "hardware_verified": false,
+  "tx1_native_verified": false,
+  "python": "3.12.3",
+  "architecture": "x86_64",
+  "python38_syntax_error": null,
+  "checks": [
+    {
+      "name": "test_go2_edu_bringup",
+      "exit_code": 0
+    },
+    {
+      "name": "test_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_vslam_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_motion_sweep",
+      "exit_code": 0
+    },
+    {
+      "name": "test_vslam_e2e_benchmark",
+      "exit_code": 0
+    },
+    {
+      "name": "test_ros2_vslam_bridge",
+      "exit_code": 0
+    },
+    {
+      "name": "test_terrain_navigator",
+      "exit_code": 0
+    },
+    {
+      "name": "test_navigation_geometry",
+      "exit_code": 0
+    },
+    {
+      "name": "test_high_level_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_lidar",
+      "exit_code": 0
+    },
+    {
+      "name": "run_offline",
+      "exit_code": 0
+    }
+  ],
+  "source_sha256": {
+    "deploy/navigation/grid_navigation.py": "cbb3c984824aced42c721c613ace2c7de127ef8118117dccdc1790399b964084",
+    "deploy/navigation/verify_offline.py": "5b7260dd34affc114415db04f6eca02603d2d34217fbc61120b22d04d88a1e6d",
+    "deploy/navigation/run_offline.py": "8c20fc1fe7cc5913cfad46674d3da85747c1ef6a9692d3a218d97f737eb77f2c",
+    "deploy/navigation/adapters.py": "9882415df0612046ae1714ad4deb0b56ed1ce9f843b206213fbaa63d8cf8b84c",
+    "deploy/navigation/terminal_control.py": "9cd368a097d8d17764ddb3a701a5e33d5755cb3ca3d773712346168a6abd368a",
+    "deploy/navigation/high_level_nav_policy.py": "06dd69d42804c25bd480b6e680cb7565661a0d10a049b436855efecf993baba6",
+    "deploy/navigation/terrain_navigator.py": "2e0a3c526090ae39eefeb29e1a3941e964f1b60f593b0bc9c0da0496f0abc837",
+    "deploy/navigation/contracts.py": "85805c374e2f8408d7d15cdb5da626ffa21d896c5e37860c16c0e0aa3f88eecf",
+    "deploy/navigation/test_navigation.py": "3455fe565d0a3f4fa0ba457dc6b1ffc23fcb69ea2d65481c0c311645d4063430",
+    "deploy/navigation/motion_gateway.py": "bdb4a82c9a23e983925002e49e09a64794d047b96160ff6f9c6e76d01ecdec32",
+    "deploy/navigation/mock_edu.py": "6bd43ba1e0d2690bb229fa71f60e7ff64862434764e3a344a3cbabae0f60f079",
+    "deploy/navigation/runtime.py": "bdc117a76a2c17f8ec8e9662c5870b07911bcb661c6e5a3d21cf3330a00a1d1d",
+    "deploy/navigation/__init__.py": "0ce54ff1d7bf6c7fffdbb7c037d8f9ba63e9f81b2b2c0c104f5df075bcb2f4ee",
+    "deploy/lidar/geometry.py": "cd0d43ee4b2006af972e75cdb1837809e347deb28c99cebdc128b6fb8eb99a22",
+    "deploy/lidar/grid_map.py": "5e56770aecf1d9254b87c5d3364e70fb9bb97961e2a773923465f1a2230f844e",
+    "deploy/lidar/run_offline.py": "23306e90acba5a04cc6e5200d91ac131d8c948b4a887c208a010d29810a45357",
+    "deploy/lidar/cli.py": "65e50adeb4d670fde4cab3ae117bf8dd9bc8c84120aa1872cd8444195c1577cc",
+    "deploy/lidar/ros_smoke.py": "83cb40976d708f8de3a9ab480d1abdb16a675c7a601a90ba12f4bcc5fdbddc1e",
+    "deploy/lidar/fixtures.py": "11ad1817034c0450d5a90277f829b3b547f67b8b0172627f173623e5924b481d",
+    "deploy/lidar/go2_lidar_mapping.launch.py": "8da7ea9aa6689bcfdce43b128124ef132da76a9a53547fedd7b2df7fd924a886",
+    "deploy/lidar/recording.py": "2a7bc081ef8697ec5ceb167fb719b1bb5dcfabbe1ca9ddccabd79e56441dbee9",
+    "deploy/lidar/localization.py": "a486ae7e162de48f76ac269db260812b8d17ae8c8eb164cef47dd90f321754f5",
+    "deploy/lidar/ros_capture.py": "5cfc0de2d9b5d00cd8fae67b063971a63da7911529b500070c1a7f7e050d382e",
+    "deploy/lidar/test_lidar.py": "b9c10a039dd3ad451a826e1ece1b0ad482f7ab73b8d2016f49dac65cdb6511b5",
+    "deploy/lidar/__init__.py": "819f68096f4bea738c5bbdc4e023655cee29775a4fb55c65cfb0f6d8fb16e2d0",
+    "deploy/lidar/session.py": "e2fe92387fa1fc4bef9d0ce1ea5cfcd8587dcf3e049c9013ab218d58a4792dad",
+    "deploy/deploy_real/go2_edu_bringup.py": "a277ea3f735d6fc01272d853338b7facc6530c4119e660295e216d697dd8ba8f",
+    "deploy/deploy_real/collect_tx1_info.py": "7c8c21215cb48e712fec81543b57f2a98494940125be6f5834c1fe4d0b7ecb38",
+    "deploy/deploy_real/test_go2_edu_bringup.py": "ceb87e211042f0aa86b3d3abe5b43e44e894a00856b4bee7f59d2023b68b68c4",
+    "deploy/deploy_real/common/command_helper.py": "74dccc66ab03f31df9388ae1e477a61f710f5de483bc56aaa3ba878169f3bce1",
+    "deploy/deploy_mujoco/shared_navigation.py": "09216060af981767e17d6569ee95cefe872835d99613caf2974e11c350d2c26c",
+    "deploy/deploy_mujoco/deploy_go2.py": "26a9188f097f3dca988148070f1adffea9607398a892ed8245234cde1f6d4e89",
+    "deploy/deploy_mujoco/goal_navigator.py": "3f6ea68e476d2159a7dcad00019083dfd380b569f4958ec79212d437a400ffb4",
+    "deploy/deploy_mujoco/terrain_navigator.py": "fc1229bb8933de16d398b500ad1e3b89fb7728d91a0816bd0e5a8aeb5b852020",
+    "deploy/deploy_mujoco/high_level_nav_policy.py": "9c63c7f1ac257eb8c4aa5df9afdc23a91e36a348bb09070b8b5af3e9496a0aba",
+    "deploy/deploy_mujoco/vslam_e2e_benchmark.py": "5b16e5c2ef31e9d065df19a6605d60aa93432894906bff489fb8394f11c0644d",
+    "deploy/deploy_mujoco/ros2_vslam_bridge.py": "3c8271cd52a763135ba54d57d3b82f95d23ca09d814900bc5ca3b3e8afd34d92",
+    "deploy/deploy_mujoco/lidar_heightmap.py": "af5ce75e90024d8b590d5318dac84f499c2604735e5d94185376e33a925c4572"
+  }
+}

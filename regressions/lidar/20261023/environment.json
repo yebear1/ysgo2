@@ -1,0 +1,14 @@
+{
+  "python": "3.12.3",
+  "architecture": "x86_64",
+  "numpy": "1.26.4",
+  "opencv": "4.6.0",
+  "ros_packages": {
+    "rtabmap": "0.23.7",
+    "rtabmap_slam": "0.23.7",
+    "rtabmap_odom": "0.23.7",
+    "rclpy": "7.1.12",
+    "sensor_msgs_py": "5.3.8",
+    "tf2_ros": "0.36.22"
+  }
+}

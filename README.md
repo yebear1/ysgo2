@@ -17,6 +17,8 @@
 
 </div>
 
+Camera-independent Go2 EDU preparation: [LiDAR mapping, saved-map localization and replay](docs/GO2_LIDAR_PREPARATION.md) (Chinese; hardware-free validation, no deployment).
+
 ## 📦 Installation
 
 Follow the step-by-step setup guide in [setup.md](doc/setup_en.md).

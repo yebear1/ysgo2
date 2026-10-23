@@ -24,6 +24,7 @@
 ## 🛠️ 使用指南
 
 没有实物时可先运行 [Go2 EDU / TX1 离线准备与故障测试](docs/GO2_OFFLINE_PREPARATION.md)。
+摄像头独立的路线见 [Go2 激光建图、保存地图定位与回放](docs/GO2_LIDAR_PREPARATION.md)。
 
 ### 1. 训练
 

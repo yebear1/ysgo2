@@ -1,0 +1,27 @@
+{
+  "base_commit": "31bcc7ed336e0588aae12adf172f59ac3f584312",
+  "source_sha256": {
+    "README.md": "cabdc7b645b4e017e0902a3e0a6382cc112650e0f1aa94e7b64c1229b0c89160",
+    "README_zh.md": "60e9e439eaa00a4bf35a32c95fa4c9b8876e852d95ded7f027dda755e8958200",
+    "deploy/lidar/__init__.py": "819f68096f4bea738c5bbdc4e023655cee29775a4fb55c65cfb0f6d8fb16e2d0",
+    "deploy/lidar/cli.py": "65e50adeb4d670fde4cab3ae117bf8dd9bc8c84120aa1872cd8444195c1577cc",
+    "deploy/lidar/configs/go2_builtin.json": "1cff0c4b79c43cb227d20d7466a342a879cab88a311a3df4dba9771bf72a6a76",
+    "deploy/lidar/configs/go2_workstation_icp.json": "db8b580240512ca37f8b7dea52d151a544d75a52ea175a275d02b80587e7dee6",
+    "deploy/lidar/fixtures.py": "11ad1817034c0450d5a90277f829b3b547f67b8b0172627f173623e5924b481d",
+    "deploy/lidar/geometry.py": "cd0d43ee4b2006af972e75cdb1837809e347deb28c99cebdc128b6fb8eb99a22",
+    "deploy/lidar/go2_lidar_mapping.launch.py": "8da7ea9aa6689bcfdce43b128124ef132da76a9a53547fedd7b2df7fd924a886",
+    "deploy/lidar/grid_map.py": "5e56770aecf1d9254b87c5d3364e70fb9bb97961e2a773923465f1a2230f844e",
+    "deploy/lidar/localization.py": "a486ae7e162de48f76ac269db260812b8d17ae8c8eb164cef47dd90f321754f5",
+    "deploy/lidar/recording.py": "2a7bc081ef8697ec5ceb167fb719b1bb5dcfabbe1ca9ddccabd79e56441dbee9",
+    "deploy/lidar/ros_capture.py": "5cfc0de2d9b5d00cd8fae67b063971a63da7911529b500070c1a7f7e050d382e",
+    "deploy/lidar/ros_smoke.py": "83cb40976d708f8de3a9ab480d1abdb16a675c7a601a90ba12f4bcc5fdbddc1e",
+    "deploy/lidar/run_offline.py": "23306e90acba5a04cc6e5200d91ac131d8c948b4a887c208a010d29810a45357",
+    "deploy/lidar/session.py": "e2fe92387fa1fc4bef9d0ce1ea5cfcd8587dcf3e049c9013ab218d58a4792dad",
+    "deploy/lidar/test_lidar.py": "b9c10a039dd3ad451a826e1ece1b0ad482f7ab73b8d2016f49dac65cdb6511b5",
+    "deploy/navigation/verify_offline.py": "5b7260dd34affc114415db04f6eca02603d2d34217fbc61120b22d04d88a1e6d",
+    "docs/GO2_LIDAR_PREPARATION.md": "385665e0a8e4b5313615bc142c2abc5b52cde42cde372e7a0e0932885390be5a",
+    "docs/GO2_OFFLINE_PREPARATION.md": "9e3e9d25342d7b55d28900e9daf0f3cb460b332a54d94c7fe1c4a594506026c6"
+  },
+  "evidence_sha256": "00203e9ee917269b3dd25e4174c2ab30d58ce6148cb866a53d5376730ac16887",
+  "evidence_scope": "Final tests plus retained 2026-10-23 failed diagnostic attempts; earlier temporary logs are not retained"
+}

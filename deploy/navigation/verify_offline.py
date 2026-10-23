@@ -27,10 +27,11 @@ def main():
             'test_ros2_vslam_bridge.py', 'test_terrain_navigator.py', 'test_navigation_geometry.py',
             'test_high_level_navigation.py')]
     commands = [[sys.executable, s] for s in scripts]
+    commands.append([sys.executable, '-m', 'deploy.lidar.test_lidar'])
     commands.append([sys.executable, 'deploy/navigation/run_offline.py', '--output', str(output/'mock')])
     results = []
     for command in commands:
-        name = Path(command[1]).stem
+        name = command[2].split('.')[-1] if command[1] == '-m' else Path(command[1]).stem
         print('Running '+name, flush=True)
         try:
             run = subprocess.run(command, cwd=str(ROOT), stdout=subprocess.PIPE,
@@ -41,6 +42,7 @@ def main():
         (output/(name+'.log')).write_text(log)
         results.append(dict(name=name, exit_code=code))
     sources = list((ROOT/'deploy/navigation').glob('*.py'))
+    sources += list((ROOT/'deploy/lidar').glob('*.py'))
     sources += [ROOT/'deploy/deploy_real'/name for name in (
         'go2_edu_bringup.py','collect_tx1_info.py','test_go2_edu_bringup.py','common/command_helper.py')]
     sources += [ROOT/'deploy/deploy_mujoco'/name for name in (

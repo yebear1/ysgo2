@@ -1,0 +1,172 @@
+{
+  "date": "2026-10-23",
+  "scope": "hardware-free Go2 EDU LiDAR navigation preparation",
+  "passed": true,
+  "hardware_verified": false,
+  "tx1_native_verified": false,
+  "imu_fusion_verified": false,
+  "unit_test_counts": {
+    "test_go2_edu_bringup": 14,
+    "test_navigation": 30,
+    "test_lidar": 20
+  },
+  "regression_commands": [
+    {
+      "name": "test_go2_edu_bringup",
+      "exit_code": 0
+    },
+    {
+      "name": "test_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_vslam_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_motion_sweep",
+      "exit_code": 0
+    },
+    {
+      "name": "test_vslam_e2e_benchmark",
+      "exit_code": 0
+    },
+    {
+      "name": "test_ros2_vslam_bridge",
+      "exit_code": 0
+    },
+    {
+      "name": "test_terrain_navigator",
+      "exit_code": 0
+    },
+    {
+      "name": "test_navigation_geometry",
+      "exit_code": 0
+    },
+    {
+      "name": "test_high_level_navigation",
+      "exit_code": 0
+    },
+    {
+      "name": "test_lidar",
+      "exit_code": 0
+    },
+    {
+      "name": "run_offline",
+      "exit_code": 0
+    }
+  ],
+  "planar": [
+    {
+      "heading": 0,
+      "passed": true,
+      "completed_goals": 2,
+      "collisions": 0,
+      "ever_started": true,
+      "startup_match_seconds": 0.2,
+      "simulation_seconds": 28.6,
+      "final_distance": 0.14632060448863363,
+      "longest_progress_interval_seconds": 0.5,
+      "failure": null,
+      "processing_p95_seconds": 0.008331289899933833,
+      "processing_max_seconds": 0.0565415450000728
+    },
+    {
+      "heading": -30,
+      "passed": true,
+      "completed_goals": 2,
+      "collisions": 0,
+      "ever_started": true,
+      "startup_match_seconds": 0.2,
+      "simulation_seconds": 28.3,
+      "final_distance": 0.14809131265387243,
+      "longest_progress_interval_seconds": 0.8000000000000007,
+      "failure": null,
+      "processing_p95_seconds": 0.014335365499925956,
+      "processing_max_seconds": 0.03141125399997691
+    },
+    {
+      "heading": 30,
+      "passed": true,
+      "completed_goals": 2,
+      "collisions": 0,
+      "ever_started": true,
+      "startup_match_seconds": 0.2,
+      "simulation_seconds": 28.3,
+      "final_distance": 0.14809131265387243,
+      "longest_progress_interval_seconds": 0.8000000000000007,
+      "failure": null,
+      "processing_p95_seconds": 0.006972127500000624,
+      "processing_max_seconds": 0.030457702000148856
+    },
+    {
+      "heading": 60,
+      "passed": true,
+      "completed_goals": 2,
+      "collisions": 0,
+      "ever_started": true,
+      "startup_match_seconds": 0.2,
+      "simulation_seconds": 30.200000000000003,
+      "final_distance": 0.1452776509133864,
+      "longest_progress_interval_seconds": 0.6000000000000014,
+      "failure": null,
+      "processing_p95_seconds": 0.006760944199891128,
+      "processing_max_seconds": 0.030216440000003786
+    },
+    {
+      "heading": 180,
+      "passed": true,
+      "completed_goals": 2,
+      "collisions": 0,
+      "ever_started": true,
+      "startup_match_seconds": 0.2,
+      "simulation_seconds": 40.5,
+      "final_distance": 0.14499186314139526,
+      "longest_progress_interval_seconds": 0.6000000000000001,
+      "failure": null,
+      "processing_p95_seconds": 0.006724943250048909,
+      "processing_max_seconds": 0.030932236000126068
+    }
+  ],
+  "ros": {
+    "test": "actual-ros2-rtabmap-with-synthetic-rays",
+    "hardware_verified": false,
+    "imu_fusion_verified": false,
+    "closed_loop_navigation_verified": false,
+    "sensor_frames": 154,
+    "received": {
+      "odometry": 148,
+      "maps": 3,
+      "last_position": [
+        0.3000832200050354,
+        0.0005564778111875057,
+        0.0
+      ],
+      "map_free_cells": 16010
+    },
+    "capture_valid_frames": 133,
+    "capture_faults": 4,
+    "imu_frames": 133,
+    "live_matched_frames": 51,
+    "live_analysis_commands": 14,
+    "replay_matched_frames": 129,
+    "dropout_stopped_analysis": true,
+    "pose_recovered_after_dropout": true,
+    "resumed_without_rearm": false,
+    "final_truth": [
+      0.3,
+      0.0,
+      0.1
+    ],
+    "final_xy_error_m": 0.0005626660853313724,
+    "saved_map": true,
+    "passed": true
+  },
+  "limitations": [
+    "Synthetic sensors only; no real L1/L2 recording or deployment",
+    "Bounded 2D localization around a known start region; no arbitrary global 3D relocalization",
+    "ICP baseline, not tightly coupled LiDAR-IMU fusion or per-point deskew",
+    "ROS live control output is analysis-only; no motion SDK transport",
+    "1 m planar round trips do not prove narrow-passage or three-room hardware navigation"
+  ]
+}

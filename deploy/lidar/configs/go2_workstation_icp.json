@@ -1,0 +1,17 @@
+{
+  "profile": "go2_builtin_with_workstation_icp",
+  "cloud_topic": "/utlidar/cloud",
+  "imu_topic": "",
+  "base_frame": "base_link",
+  "odom_frame": "go2_lidar_odom",
+  "cloud_frame": "utlidar_lidar",
+  "bins": 72,
+  "min_z": -0.27,
+  "max_z": 0.5,
+  "min_range": 0.1,
+  "max_range": 8.0,
+  "max_tilt_degrees": 10.0,
+  "max_sensor_age": 0.2,
+  "note": "Only cloud topic/frame are confirmed by Unitree ROS2 README. TF frames, height slab, time sync and optional IMU topic require measured configuration. No guessed extrinsics are supplied.",
+  "odom_topic": "/go2_lidar/odom"
+}
