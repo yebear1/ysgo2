@@ -19,6 +19,8 @@
 
 Camera-independent Go2 EDU preparation: [LiDAR mapping, saved-map localization and replay](docs/GO2_LIDAR_PREPARATION.md) (Chinese; hardware-free validation, no deployment).
 
+Go2 X with an external Jetson Orin NX: [built-in LiDAR bring-up and offline mapping status](docs/GO2X_JETSON_BRINGUP.md) (Chinese; real sensor capture and diagnostic mapping verified, live autonomous motion not verified).
+
 ## 📦 Installation
 
 Follow the step-by-step setup guide in [setup.md](doc/setup_en.md).
